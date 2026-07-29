@@ -75,14 +75,14 @@ export function toDeviceThreads(
 
 export function toDeviceMessages(messages: readonly SurfaceMessage[]): DeviceMessage[] {
   return messages
-    .slice(-MAX_DEVICE_MESSAGES)
     .map((message) => ({
       id: message.id,
       role: message.role,
       status: message.status,
       text: normalizedMessageText(messageText(message)),
     }))
-    .filter((message) => message.text.length > 0);
+    .filter((message) => message.text.length > 0)
+    .slice(-MAX_DEVICE_MESSAGES);
 }
 
 export function toDeviceThreadState(
@@ -147,19 +147,17 @@ export function parseDeviceCommand(value: unknown): DeviceClientCommand {
 function messageText(message: SurfaceMessage): string {
   return message.parts
     .map((part) => {
-      if (part.type === 'text' || part.type === 'status') return part.text;
-      if (part.type === 'tool') {
-        const detail = typeof part.body === 'string' && part.body.trim()
-          ? `\n${part.body.trim()}`
-          : '';
-        return `${part.title} · ${part.status}${detail}`;
+      if (part.type === 'text') {
+        return message.role === 'assistant' && part.phase === 'commentary'
+          ? ''
+          : part.text;
       }
       if (part.type === 'attachment') return `[${part.attachment.name}]`;
       if (part.type === 'media') return part.media.alt || part.media.title || '[media]';
       return '';
     })
-    .filter(Boolean)
-    .join('\n')
+    .filter((part) => part.trim().length > 0)
+    .join('\n\n')
     .trim();
 }
 
@@ -182,7 +180,25 @@ function boundedText(value: string, max: number): string {
 }
 
 function normalizedMessageText(value: string): string {
-  return value.replace(/\r\n?/g, '\n').trim();
+  const normalized = value
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+\n/g, '\n');
+  return normalized
+    .split(/\n[ \t]*\n+/)
+    .map((block) => (
+      preservesLineBreaks(block)
+        ? block.trim()
+        : block.replace(/[ \t]*\n[ \t]*/g, ' ').replace(/[ \t]{2,}/g, ' ').trim()
+    ))
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function preservesLineBreaks(block: string): boolean {
+  return block.split('\n').some((line) => (
+    /^\s*(?:```|~~~|#{1,6}\s|>\s|[-*+]\s|\d+[.)]\s|\|)/.test(line)
+    || /^\s{4}\S/.test(line)
+  ));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

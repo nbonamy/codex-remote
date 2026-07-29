@@ -52,14 +52,13 @@ function createTray(): void {
 
 function createTrayIcon(): NativeImage {
   if (process.platform === 'darwin') {
-    const symbol = nativeImage.createFromNamedImage('terminal', {
-      pointSize: 16,
-      weight: 'semibold',
-      scale: 'small',
-    });
-    if (!symbol.isEmpty()) {
-      symbol.setTemplateImage(true);
-      return symbol;
+    const trayIconPath = app.isPackaged
+      ? join(process.resourcesPath, 'trayTemplate.png')
+      : join(app.getAppPath(), 'build', 'trayTemplate.png');
+    const icon = nativeImage.createFromPath(trayIconPath);
+    if (!icon.isEmpty()) {
+      icon.setTemplateImage(true);
+      return icon;
     }
   }
   return nativeImage.createFromDataURL(FALLBACK_TRAY_ICON);
@@ -137,6 +136,10 @@ async function startServices(): Promise<void> {
     simulatorHtml,
     port,
     pairing: pairingStore,
+    realtimeVoiceAvailable: () => (
+      surface?.getSnapshot().authentication.account?.type === 'apiKey'
+      || Boolean(process.env.OPENAI_API_KEY?.trim())
+    ),
     transcribeAudio: process.platform === 'darwin'
       ? (wave) => transcribeWithAppleSpeechAnalyzer(wave)
       : undefined,

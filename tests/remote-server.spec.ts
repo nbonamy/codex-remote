@@ -303,6 +303,50 @@ describe('CodexRemoteServer realtime voice', () => {
     expect(wave).toHaveLength(4_844);
     expect(conversation.sendMessage).toHaveBeenCalledWith('run the focused tests');
   });
+
+  it('uses local transcription directly when realtime API key auth is unavailable', async () => {
+    const realtime = new FakeRealtimeSession('thread-1');
+    const conversation = fakeConversation(realtime);
+    const transcribeAudio = vi.fn(async (_wave: Buffer) => ({ text: 'show the latest diff' }));
+    const server = new CodexRemoteServer({
+      surface: fakeSurface(conversation),
+      token: 'test-device-token',
+      defaultCwd: '/tmp/project',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+      realtimeVoiceAvailable: () => false,
+      transcribeAudio,
+    });
+    servers.push(server);
+    const info = await server.start();
+    expect(info.realtimeVoiceAvailable).toBe(false);
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/device?token=test-device-token`,
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+
+    await expect(messages.nextJson('hello')).resolves.toMatchObject({
+      transcription: 'available',
+    });
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({
+      type: 'audio_start',
+      threadId: 'thread-1',
+      sampleRate: 24_000,
+    }));
+    socket.send(Buffer.alloc(4_800, 1));
+    socket.send(JSON.stringify({ type: 'audio_end' }));
+
+    expect(await messages.nextJson('transcript')).toMatchObject({
+      role: 'user',
+      text: 'show the latest diff',
+    });
+    expect(conversation.startRealtime).not.toHaveBeenCalled();
+    expect(transcribeAudio).toHaveBeenCalledTimes(1);
+    expect(conversation.sendMessage).toHaveBeenCalledWith('show the latest diff');
+  });
 });
 
 describe('CodexRemoteServer thread history', () => {

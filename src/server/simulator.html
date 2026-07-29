@@ -291,8 +291,8 @@
 
       .message-copy {
         margin: 0;
-        overflow-wrap: anywhere;
-        white-space: pre-wrap;
+        overflow-wrap: normal;
+        white-space: pre;
         font: 11px/1.42 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       }
 
@@ -491,7 +491,6 @@
     </main>
     <script>
       const THREADS_PER_PAGE = 5;
-      const MESSAGE_CHARACTERS_PER_LINE = 48;
       const MESSAGE_LINES_PER_PAGE = 16;
       const query = new URLSearchParams(location.search);
       const token = query.get("token") || "";
@@ -526,6 +525,7 @@
       const buttonBLabel = document.getElementById("button-b-label");
       const recordingOverlay = document.getElementById("recording");
       const toast = document.getElementById("toast");
+      const MESSAGE_CHARACTERS_PER_LINE = measureMessageCharactersPerLine();
       let toastTimer = 0;
       let socket;
       let mediaStream;
@@ -783,6 +783,24 @@
           lines.push(remaining);
         }
         return lines.length ? lines : [""];
+      }
+
+      function measureMessageCharactersPerLine() {
+        const page = document.createElement("article");
+        page.className = "message-page";
+        page.style.visibility = "hidden";
+        const copy = document.createElement("pre");
+        copy.className = "message-copy";
+        const ruler = document.createElement("span");
+        ruler.textContent = "M".repeat(100);
+        copy.appendChild(ruler);
+        page.appendChild(copy);
+        screen.appendChild(page);
+        const availableWidth = copy.clientWidth;
+        const characterWidth = ruler.getBoundingClientRect().width / ruler.textContent.length;
+        page.remove();
+        if (availableWidth <= 0 || characterWidth <= 0) return 46;
+        return Math.max(20, Math.floor((availableWidth - 1) / characterWidth));
       }
 
       function selectReaderMessage(messages) {

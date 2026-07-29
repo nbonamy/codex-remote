@@ -62,21 +62,23 @@ CODEX_REMOTE_CWD="$HOME/src" \
 npm run dev
 ```
 
-The preferred voice path uses app-server's experimental
-`thread/realtime/start` protocol over its v2 WebSocket transport. Codex owns
-transcription and returns live transcript and synthesized audio events. Codex
-Remote enables the child app-server's `realtime_conversation` feature without
-modifying the user's global Codex configuration or starting an Electron
-renderer.
+On macOS, push-to-talk uses the Apple SpeechAnalyzer helper packaged by
+`codex-app-sdk`, then sends the transcript as an ordinary Codex text command.
+The ESP32 and bridge therefore work with the user's normal ChatGPT-authenticated
+Codex session and do not need an OpenAI API key.
 
-Realtime voice is currently gated by the Codex service. If negotiation is not
-available, the macOS host automatically transcribes the captured utterance with
-the Apple SpeechAnalyzer helper packaged by `codex-app-sdk`, then sends the
-result as an ordinary text command. This fallback needs no OpenAI API key.
+App-server's experimental `thread/realtime/start` path is optional and requires
+OpenAI API key authentication. Codex Remote only attempts it when the connected
+Codex account is API-key authenticated or the bridge process has
+`OPENAI_API_KEY`. In that mode Codex owns transcription and returns live
+transcript and synthesized audio events. The bridge enables the child
+app-server's `realtime_conversation` feature without modifying the user's
+global Codex configuration or starting an Electron renderer.
+
 Windows and Linux builds can still browse threads and send text, but voice
-currently requires access to Codex realtime because they do not yet have a
-local transcription fallback. The local fallback returns transcripts and
-normal Codex messages; synthesized speaker audio is a realtime-only feature.
+currently requires API-key-backed Codex realtime because they do not yet have a
+local transcription backend. The keyless macOS path returns transcripts and
+normal Codex messages; synthesized speaker audio is currently realtime-only.
 
 The browser simulator asks the browser for microphone access from its loopback
 `http://127.0.0.1` origin. The ESP32 sends the same PCM stream over the
@@ -159,6 +161,18 @@ The hardware bring-up and ES8311 audio path are adapted from
 already supports this exact Waveshare board. The framed local-audio and mDNS
 design was informed by
 [nicosuave/m5mic](https://github.com/nicosuave/m5mic). See `third-party/`.
+
+## Local macOS install
+
+Build and install the current checkout without signing or notarization:
+
+```bash
+npm run install:mac
+```
+
+The target stops any running `Codex Remote` instance and atomically replaces
+`/Applications/Codex Remote.app`. It packages only the current Mac architecture;
+use the signed release workflow below for distributable artifacts.
 
 ## Signed macOS release
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { SurfaceMessage } from 'codex-app-sdk/surface';
 import {
   parseDeviceCommand,
   REALTIME_SAMPLE_RATE,
@@ -32,7 +33,7 @@ describe('device protocol', () => {
   });
 
   it('preserves complete message text for device-side pagination', () => {
-    const text = `first line\n${'response '.repeat(600).trim()}`;
+    const text = `first paragraph\n\n${'response '.repeat(600).trim()}`;
 
     expect(toDeviceMessages([{
       id: 'message-1',
@@ -40,5 +41,112 @@ describe('device protocol', () => {
       status: 'complete',
       parts: [{ type: 'text', text }],
     }])[0]?.text).toBe(text);
+  });
+
+  it('keeps conversational content and omits tool activity', () => {
+    expect(toDeviceMessages([
+      {
+        id: 'assistant-tool-only',
+        role: 'assistant',
+        status: 'complete',
+        parts: [{
+          type: 'tool',
+          id: 'edit-1',
+          title: '1 file change',
+          status: 'completed',
+          body: 'update\n/tmp/capture_all_balances.py',
+        }],
+      },
+      {
+        id: 'assistant-response',
+        role: 'assistant',
+        status: 'complete',
+        parts: [
+          {
+            type: 'text',
+            text: 'Starting the refresh.\r\nI am checking each institution.',
+            phase: 'commentary',
+          },
+          {
+            type: 'tool',
+            id: 'edit-2',
+            title: '1 file change',
+            status: 'completed',
+            body: 'update\n/tmp/capture_all_balances.py',
+          },
+          { type: 'status', text: 'checked workspace' },
+          {
+            type: 'text',
+            text: 'The earlier values are\r\npreserved.',
+            phase: 'final_answer',
+          },
+        ],
+      },
+    ])).toEqual([
+      {
+        id: 'assistant-response',
+        role: 'assistant',
+        status: 'complete',
+        text: 'The earlier values are preserved.',
+      },
+    ]);
+  });
+
+  it('reflows soft prose wraps but preserves structured blocks', () => {
+    expect(toDeviceMessages([{
+      id: 'assistant-response',
+      role: 'assistant',
+      status: 'complete',
+      parts: [{
+        type: 'text',
+        phase: 'final_answer',
+        text: [
+          'The runner checkpoints every completed institution, so any failure resumes',
+          'from',
+          'that exact point.',
+          '',
+          '- Preserves completed balances',
+          '- Resumes at a named site',
+          '',
+          '```text',
+          'bank-a: complete',
+          '```',
+        ].join('\n'),
+      }],
+    }])[0]?.text).toBe([
+      'The runner checkpoints every completed institution, so any failure resumes from that exact point.',
+      '',
+      '- Preserves completed balances',
+      '- Resumes at a named site',
+      '',
+      '```text',
+      'bank-a: complete',
+      '```',
+    ].join('\n'));
+  });
+
+  it('applies the device history limit after dropping tool-only messages', () => {
+    const messages = Array.from({ length: 16 }, (_, index): SurfaceMessage => ({
+      id: `message-${index}`,
+      role: 'assistant',
+      status: 'complete',
+      parts: [{ type: 'text', text: `response ${index}` }],
+    }));
+    messages.push({
+      id: 'tool-only',
+      role: 'assistant',
+      status: 'complete',
+      parts: [{
+        type: 'tool',
+        id: 'command',
+        title: 'command',
+        status: 'completed',
+      }],
+    });
+
+    const projected = toDeviceMessages(messages);
+    expect(projected).toHaveLength(14);
+    expect(projected[0]?.id).toBe('message-2');
+    expect(projected.at(-1)?.id).toBe('message-15');
   });
 });

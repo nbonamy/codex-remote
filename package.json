@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "dist": "npm run dist:mac",
     "dist:mac": "npm run build && node scripts/package-macos.mjs",
+    "install:mac": "npm run build && node scripts/install-macos.mjs",
     "verify:mac": "node scripts/verify-macos-release.mjs",
     "firmware:build": "pio run -d firmware/waveshare",
     "firmware:upload": "npm run firmware:upload:v2",
@@ -61,10 +62,19 @@
       {
         "from": "node_modules/codex-app-sdk/assets",
         "to": "assets"
+      },
+      {
+        "from": "build/trayTemplate.png",
+        "to": "trayTemplate.png"
+      },
+      {
+        "from": "build/trayTemplate@2x.png",
+        "to": "trayTemplate@2x.png"
       }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png",
       "target": [
         "dmg",
         "zip"

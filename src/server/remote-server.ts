@@ -44,7 +44,7 @@ export type RemoteServerInfo = {
   localUrl: string;
   networkUrls: string[];
   simulatorUrl: string;
-  realtimeVoiceAvailable: true;
+  realtimeVoiceAvailable: boolean;
 };
 
 export type RemoteServerOptions = {
@@ -56,6 +56,7 @@ export type RemoteServerOptions = {
   port?: number;
   advertise?: boolean;
   realtimeBridge?: RemoteRealtimeBridge;
+  realtimeVoiceAvailable?: () => boolean;
   pairing?: PairingStore;
   transcribeAudio?: (wave: Buffer) => Promise<{
     text: string;
@@ -162,7 +163,7 @@ export class CodexRemoteServer {
       localUrl,
       networkUrls,
       simulatorUrl: `${localUrl}/simulator?token=${encodeURIComponent(this.options.token)}`,
-      realtimeVoiceAvailable: true,
+      realtimeVoiceAvailable: this.isRealtimeVoiceAvailable(),
     };
 
     if (this.options.advertise !== false && port !== 0) {
@@ -190,7 +191,11 @@ export class CodexRemoteServer {
 
   getInfo(): RemoteServerInfo {
     if (!this.info) throw new Error('Codex Remote server has not started');
-    return { ...this.info, networkUrls: [...this.info.networkUrls] };
+    return {
+      ...this.info,
+      networkUrls: [...this.info.networkUrls],
+      realtimeVoiceAvailable: this.isRealtimeVoiceAvailable(),
+    };
   }
 
   async close(): Promise<void> {
@@ -322,7 +327,7 @@ export class CodexRemoteServer {
           account: snapshot.authentication.account?.type ?? null,
           threadCount: snapshot.conversations.length,
           defaultCwd: this.options.defaultCwd,
-          realtimeVoiceAvailable: true,
+          realtimeVoiceAvailable: this.isRealtimeVoiceAvailable(),
         });
         return;
       }
@@ -417,7 +422,7 @@ export class CodexRemoteServer {
       type: 'hello',
       apiVersion: API_VERSION,
       platform: process.platform,
-      transcription: this.options.realtimeBridge || this.options.transcribeAudio
+      transcription: this.isRealtimeVoiceAvailable() || this.options.transcribeAudio
         ? 'available'
         : 'unavailable',
     });
@@ -494,7 +499,11 @@ export class CodexRemoteServer {
           session.threadId = threadId;
           const sampleRate = command.sampleRate ?? REALTIME_SAMPLE_RATE;
           let realtime: DeviceRealtime | null = null;
-          if (!this.realtimeStartupError) {
+          const realtimeVoiceAvailable = this.isRealtimeVoiceAvailable();
+          if (!realtimeVoiceAvailable && session.realtime) {
+            await this.releaseRealtime(session);
+          }
+          if (realtimeVoiceAvailable && !this.realtimeStartupError) {
             try {
               realtime = await this.ensureRealtime(session, threadId);
             } catch (error) {
@@ -515,7 +524,14 @@ export class CodexRemoteServer {
             this.send(session, { type: 'status', status: 'recording' });
           } else {
             if (!this.options.transcribeAudio) {
-              throw new Error(this.realtimeStartupError ?? 'Speech transcription is unavailable');
+              throw new Error(
+                this.realtimeStartupError
+                  ?? (
+                    realtimeVoiceAvailable
+                      ? 'Speech transcription is unavailable'
+                      : 'Push-to-talk requires API key authentication or a local transcription backend'
+                  ),
+              );
             }
             session.audio = {
               mode: 'transcription',
@@ -675,6 +691,10 @@ export class CodexRemoteServer {
       await peer?.close();
       throw error;
     }
+  }
+
+  private isRealtimeVoiceAvailable(): boolean {
+    return this.options.realtimeVoiceAvailable?.() ?? true;
   }
 
   private handleRealtimeEvent(
