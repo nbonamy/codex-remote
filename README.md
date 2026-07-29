@@ -16,11 +16,29 @@ simulator. This is the fastest way to iterate before the board arrives.
 
 ## Current interaction
 
-- Thread list: PWR moves to the next thread; BOOT opens it.
+- Thread list: tap a thread to open it; swipe down for the next page and up for
+  the previous page.
+- Thread list: press BOOT to create and open a new thread.
 - Conversation: hold BOOT to talk; release to transcribe and send to Codex.
-- Conversation: press PWR to return to the thread list.
-- The HTML simulator uses the same protocol. Arrow keys move, Enter opens,
-  Escape goes back, and Space is push-to-talk.
+- Conversation: tap the back arrow to return to the thread list.
+- Conversation: swipe down for the next message page and up for the previous
+  page. Complete messages are retained; long messages continue across pages.
+- After push-to-talk, the reader switches to page one of the new response.
+  Streaming fills that page and buffers overflow without moving the reader.
+- The HTML simulator has the same interactions. Arrow keys page, Escape goes
+  back, and Space is push-to-talk.
+
+### Simulator
+
+The Electron window embeds the 368 x 448 HTML device simulator next to the
+desktop status panel. Run `npm run dev` and use it while the hardware is
+unavailable; it connects to the same WebSocket and Codex app-server as the
+firmware.
+
+This is a behavioral and visual emulator, not instruction-level ESP32
+emulation. General ESP32 emulators do not model this board's custom
+SH8601/CO5300 AMOLED, FT3168/CST820 touch controller, ES8311 audio codec, and
+AXP2101 power-management hardware.
 
 ## Desktop development
 
@@ -103,17 +121,24 @@ desktop LAN IP.
 
 ```bash
 npm run firmware:build
-npm run firmware:upload
+npm run firmware:upload:v2
 npm run firmware:monitor
 ```
+
+Waveshare now ships two board revisions. The build command produces firmware
+for both: V1 uses SH8601/FT3168 and V2 uses CO5300/CST820. Current shipments
+default to V2; check the label on the back and use `firmware:upload:v1` when
+needed. Both builds use the same touch paging and application UI.
 
 The firmware pins the pioarduino ESP32 platform because this board support
 uses the Arduino 3 `ESP_I2S` API. PlatformIO may maintain an internal
 `~/.platformio/penv` for platform build scripts even when the `pio` executable
 itself was installed with pipx; that directory is not the active CLI install.
 
-The generated binary is under
-`firmware/waveshare/.pio/build/waveshare-esp32-s3-touch-amoled-1_8/firmware.bin`.
+The generated binaries are under:
+
+- `firmware/waveshare/.pio/build/waveshare-esp32-s3-touch-amoled-1_8-v1/firmware.bin`
+- `firmware/waveshare/.pio/build/waveshare-esp32-s3-touch-amoled-1_8-v2/firmware.bin`
 
 ## Sources
 

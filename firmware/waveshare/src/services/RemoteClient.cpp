@@ -123,6 +123,14 @@ bool RemoteClient::interrupt(const String &threadId) {
   return sendControl(document);
 }
 
+void RemoteClient::clearActiveThread() {
+  _activeThreadId = "";
+  _activeThreadTitle = "";
+  _activeThreadBusy = false;
+  _messageCount = 0;
+  _error = "";
+}
+
 bool RemoteClient::sendControl(JsonDocument &document) {
   if (!_connected) {
     return false;
@@ -208,6 +216,7 @@ void RemoteClient::parseThread(JsonObjectConst thread) {
       break;
     }
     RemoteMessage &target = _messages[_messageCount++];
+    target.id = String(item["id"] | "");
     target.role = String(item["role"] | "");
     target.text = String(item["text"] | "");
     target.status = String(item["status"] | "");

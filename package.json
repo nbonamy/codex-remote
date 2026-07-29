@@ -14,7 +14,9 @@
     "test:watch": "vitest",
     "dist": "npm run build && electron-builder",
     "firmware:build": "pio run -d firmware/waveshare",
-    "firmware:upload": "pio run -d firmware/waveshare -t upload",
+    "firmware:upload": "npm run firmware:upload:v2",
+    "firmware:upload:v1": "pio run -d firmware/waveshare -e waveshare-esp32-s3-touch-amoled-1_8-v1 -t upload",
+    "firmware:upload:v2": "pio run -d firmware/waveshare -e waveshare-esp32-s3-touch-amoled-1_8-v2 -t upload",
     "firmware:monitor": "pio device monitor -b 115200"
   },
   "dependencies": {

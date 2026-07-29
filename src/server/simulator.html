@@ -41,6 +41,10 @@
         user-select: none;
       }
 
+      body.capture-mode {
+        place-items: start;
+      }
+
       #device {
         position: relative;
         width: 368px;
@@ -124,23 +128,23 @@
 
       .thread-list {
         display: grid;
-        gap: 8px;
+        gap: 6px;
       }
 
       .thread-card {
         display: grid;
-        grid-template-columns: 25px minmax(0, 1fr) auto;
-        gap: 10px;
+        grid-template-columns: 18px minmax(0, 1fr) auto;
+        gap: 8px;
         align-items: center;
-        min-height: 54px;
-        padding: 8px 10px;
+        min-height: 50px;
+        padding: 6px 10px;
         overflow: hidden;
         border: 1px solid transparent;
         border-radius: 12px;
         background: var(--panel);
       }
 
-      .thread-card.selected {
+      .thread-card:active {
         border-color: rgba(132, 245, 194, 0.66);
         background:
           linear-gradient(90deg, rgba(132, 245, 194, 0.11), transparent 70%),
@@ -151,10 +155,6 @@
       .thread-icon {
         color: var(--muted);
         font: 700 17px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-      }
-
-      .selected .thread-icon {
-        color: var(--mint);
       }
 
       .thread-copy {
@@ -195,12 +195,28 @@
       .conversation-title {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        margin: 0 1px 11px;
+        gap: 8px;
+        min-width: 0;
+        margin: 0 1px 4px;
+      }
+
+      .back-button {
+        display: grid;
+        flex: none;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        place-items: center;
+        border: 1px solid #30383c;
+        border-radius: 9px;
+        background: var(--panel);
+        color: var(--white);
+        font: 760 17px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
       }
 
       .conversation-title h1 {
+        flex: 1;
+        min-width: 0;
         margin: 0;
         overflow: hidden;
         font-size: 17px;
@@ -226,49 +242,83 @@
         color: var(--yellow);
       }
 
-      .messages {
+      .reader-status {
+        margin: 0 2px 8px;
+        color: #657077;
+        font-size: 9px;
+        font-weight: 720;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .message-reader {
         display: flex;
         flex: 1;
         flex-direction: column;
-        gap: 9px;
-        overflow: auto;
-        padding: 2px 1px 8px;
-        scrollbar-width: none;
+        min-height: 0;
+        overflow: hidden;
+        padding: 0 1px 4px;
       }
 
-      .messages::-webkit-scrollbar {
-        display: none;
-      }
-
-      .message {
-        max-width: 91%;
-        padding: 9px 11px;
+      .message-page {
+        flex: 1;
+        min-height: 0;
+        padding: 11px 12px;
+        overflow: hidden;
         border: 1px solid #20272a;
-        border-radius: 12px 12px 12px 3px;
+        border-radius: 13px;
         background: var(--panel);
         color: #d9dcda;
-        font-size: 11px;
-        line-height: 1.38;
-        white-space: pre-wrap;
       }
 
-      .message.user {
-        align-self: flex-end;
+      .message-page.user {
         border-color: rgba(98, 215, 255, 0.22);
-        border-radius: 12px 12px 3px 12px;
         background: rgba(98, 215, 255, 0.09);
         color: #e9f7fb;
       }
 
-      .message.streaming::after {
+      .message-role {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 9px;
+        color: var(--mint);
+        font-size: 9px;
+        font-weight: 760;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .message-copy {
+        margin: 0;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+        font: 11px/1.42 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .message-page.streaming .message-role::after {
         display: inline-block;
         width: 5px;
-        height: 12px;
-        margin-left: 4px;
+        height: 9px;
         background: var(--mint);
         content: "";
-        vertical-align: -2px;
         animation: blink 0.9s steps(1) infinite;
+      }
+
+      .reader-waiting {
+        display: grid;
+        flex: 1;
+        place-items: center;
+        border: 1px solid #20272a;
+        border-radius: 13px;
+        background:
+          radial-gradient(circle at center, rgba(132, 245, 194, 0.08), transparent 58%),
+          var(--panel);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
       }
 
       .empty {
@@ -288,6 +338,14 @@
         height: 56px;
         border-top: 1px solid var(--line);
         background: #080a0b;
+      }
+
+      .controls.single {
+        grid-template-columns: 1fr;
+      }
+
+      .control[hidden] {
+        display: none;
       }
 
       .control {
@@ -312,8 +370,10 @@
 
       .key {
         display: grid;
-        width: 26px;
+        width: auto;
+        min-width: 38px;
         height: 26px;
+        padding: 0 8px;
         place-items: center;
         border: 1px solid #3c464b;
         border-radius: 999px;
@@ -412,11 +472,11 @@
       <section class="screen" id="screen"></section>
       <footer class="controls">
         <button class="control primary" id="button-a" type="button">
-          <span class="key">A</span>
+          <span class="key">BOOT</span>
           <span id="button-a-label">Open</span>
         </button>
         <button class="control" id="button-b" type="button">
-          <span class="key">B</span>
+          <span class="key">PWR</span>
           <span id="button-b-label">Next</span>
         </button>
       </footer>
@@ -424,21 +484,30 @@
         <div class="recording-inner">
           <div class="record-dot"></div>
           <div class="record-label">Listening</div>
-          <div class="record-hint">Release A to send</div>
+          <div class="record-hint">Release BOOT to send</div>
         </div>
       </div>
       <div class="toast" id="toast"></div>
     </main>
     <script>
-      const token = new URLSearchParams(location.search).get("token") || "";
+      const THREADS_PER_PAGE = 5;
+      const MESSAGE_CHARACTERS_PER_LINE = 48;
+      const MESSAGE_LINES_PER_PAGE = 16;
+      const query = new URLSearchParams(location.search);
+      const token = query.get("token") || "";
+      document.body.classList.toggle("capture-mode", query.get("capture") === "1");
       const socketProtocol = location.protocol === "https:" ? "wss:" : "ws:";
       const socketUrl = `${socketProtocol}//${location.host}/api/v1/device?token=${encodeURIComponent(token)}`;
       const state = {
         connected: false,
         view: "threads",
         threads: [],
-        selected: 0,
+        threadPage: 0,
         thread: null,
+        readerMessageId: null,
+        readerPage: 0,
+        awaitingResponse: false,
+        responseBaselineId: null,
         status: "ready",
         recording: false,
         transcription: "unavailable",
@@ -449,6 +518,7 @@
       const connectionLabel = document.getElementById("connection-label");
       const buttonA = document.getElementById("button-a");
       const buttonB = document.getElementById("button-b");
+      const controls = document.querySelector(".controls");
       const buttonALabel = document.getElementById("button-a-label");
       const buttonBLabel = document.getElementById("button-b-label");
       const recordingOverlay = document.getElementById("recording");
@@ -493,10 +563,17 @@
             state.transcription = message.transcription;
           } else if (message.type === "threads") {
             state.threads = message.threads;
-            state.selected = Math.min(state.selected, state.threads.length);
+            state.threadPage = Math.min(state.threadPage, lastThreadPage());
           } else if (message.type === "thread") {
+            const changedThread = state.thread?.id !== message.thread.id;
             state.thread = message.thread;
             state.view = "thread";
+            if (changedThread) {
+              state.readerMessageId = null;
+              state.readerPage = 0;
+              state.awaitingResponse = false;
+            }
+            selectReaderMessage(message.thread.messages || []);
           } else if (message.type === "status") {
             state.status = message.status;
           } else if (message.type === "transcript") {
@@ -509,6 +586,7 @@
           } else if (message.type === "error") {
             showToast(message.message, 5000);
             state.status = "ready";
+            state.awaitingResponse = false;
           }
           render();
         });
@@ -522,36 +600,29 @@
 
       function render() {
         connection.classList.toggle("online", state.connected);
+        controls.classList.add("single");
+        buttonB.hidden = true;
         if (state.view === "threads") {
           renderThreads();
-          buttonALabel.textContent = "Open";
-          buttonBLabel.textContent = "Next";
+          buttonALabel.textContent = "New thread";
         } else {
           renderConversation();
           buttonALabel.textContent = state.recording ? "Release" : "Hold to talk";
-          buttonBLabel.textContent = "Back";
         }
         recordingOverlay.classList.toggle("visible", state.recording);
       }
 
       function renderThreads() {
-        const entries = [
-          {
-            id: "__new__",
-            title: "New thread",
-            preview: "Start a command in the default workspace",
-            updatedAt: "",
-          },
-          ...state.threads,
-        ];
+        const start = state.threadPage * THREADS_PER_PAGE;
+        const entries = state.threads.slice(start, start + THREADS_PER_PAGE);
         screen.innerHTML = `
-          <p class="eyebrow">${state.threads.length} recent threads</p>
+          <p class="eyebrow">${threadPageLabel()}</p>
           <div class="thread-list">
-            ${entries.slice(pageStart(entries.length), pageStart(entries.length) + 4).map((thread, visibleIndex) => {
-              const index = pageStart(entries.length) + visibleIndex;
+            ${entries.map((thread, visibleIndex) => {
+              const index = start + visibleIndex;
               return `
-                <article class="thread-card ${index === state.selected ? "selected" : ""}" data-thread-index="${index}">
-                  <span class="thread-icon">${thread.id === "__new__" ? "+" : "›"}</span>
+                <article class="thread-card" data-thread-index="${index}">
+                  <span class="thread-icon">›</span>
                   <div class="thread-copy">
                     <div class="thread-title">${escapeHtml(thread.title || "Untitled")}</div>
                     <div class="thread-preview">${escapeHtml(thread.preview || "No messages yet")}</div>
@@ -564,15 +635,16 @@
         `;
         screen.querySelectorAll("[data-thread-index]").forEach((element) => {
           element.addEventListener("click", () => {
-            state.selected = Number(element.dataset.threadIndex);
-            openSelectedThread();
+            openThread(Number(element.dataset.threadIndex));
           });
         });
       }
 
-      function pageStart(count) {
-        if (count <= 4) return 0;
-        return Math.min(Math.max(0, state.selected - 2), count - 4);
+      function threadPageLabel() {
+        if (state.threads.length === 0) return "No recent threads";
+        const first = state.threadPage * THREADS_PER_PAGE + 1;
+        const last = Math.min(state.threads.length, first + THREADS_PER_PAGE - 1);
+        return `${first}–${last} of ${state.threads.length} threads`;
       }
 
       function renderConversation() {
@@ -582,44 +654,182 @@
           return;
         }
         const messages = thread.messages || [];
+        const selection = readerSelection(messages);
         screen.innerHTML = `
           <div class="conversation">
             <div class="conversation-title">
+              <button class="back-button" type="button" aria-label="Back to threads">‹</button>
               <h1>${escapeHtml(thread.title)}</h1>
               <span class="activity ${thread.busy ? "busy" : ""}">${thread.busy ? "Working" : "Ready"}</span>
             </div>
-            <div class="messages" id="messages">
-              ${messages.length ? messages.map((message) => `
-                <div class="message ${message.role} ${message.status === "streaming" ? "streaming" : ""}">
-                  ${escapeHtml(message.text)}
-                </div>
-              `).join("") : '<div class="empty">Hold A and tell Codex what to do.</div>'}
+            <div class="reader-status">${readerStatus(selection, messages.length)}</div>
+            <div class="message-reader">
+              ${renderReaderPage(selection)}
             </div>
           </div>
         `;
-        const messagesElement = document.getElementById("messages");
-        if (messagesElement) messagesElement.scrollTop = messagesElement.scrollHeight;
+        screen.querySelector(".back-button")?.addEventListener("click", backToThreads);
       }
 
-      function nextThread() {
-        if (state.view !== "threads") {
-          state.view = "threads";
-          send({ type: "list_threads" });
+      function renderReaderPage(selection) {
+        if (state.awaitingResponse) {
+          return '<div class="reader-waiting">Waiting for Codex…</div>';
+        }
+        if (!selection) {
+          return '<div class="empty">Hold BOOT and tell Codex what to do.</div>';
+        }
+        const role = selection.message.role === "user" ? "You" : "Codex";
+        const continuation = selection.page > 0 ? " · continued" : "";
+        return `
+          <article class="message-page ${selection.message.role} ${selection.message.status === "streaming" ? "streaming" : ""}">
+            <div class="message-role">${role}${continuation}</div>
+            <pre class="message-copy">${escapeHtml(selection.lines.join("\n"))}</pre>
+          </article>
+        `;
+      }
+
+      function readerSelection(messages) {
+        if (state.awaitingResponse || messages.length === 0) return null;
+        let messageIndex = messages.findIndex((message) => message.id === state.readerMessageId);
+        if (messageIndex < 0) messageIndex = messages.length - 1;
+        const message = messages[messageIndex];
+        const pages = paginateMessage(message.text);
+        const page = Math.min(Math.max(0, state.readerPage), pages.length - 1);
+        return {
+          message,
+          messageIndex,
+          page,
+          pageCount: pages.length,
+          lines: pages[page],
+        };
+      }
+
+      function readerStatus(selection, total) {
+        if (state.awaitingResponse) return "New response · page 1 · waiting";
+        if (!selection) return "No messages yet";
+        const streaming = selection.message.status === "streaming" ? " · streaming" : "";
+        return `Message ${selection.messageIndex + 1}/${total} · page ${selection.page + 1}/${selection.pageCount}${streaming}`;
+      }
+
+      function paginateMessage(text) {
+        const lines = wrapText(String(text || ""), MESSAGE_CHARACTERS_PER_LINE);
+        const pages = [];
+        for (let index = 0; index < lines.length; index += MESSAGE_LINES_PER_PAGE) {
+          pages.push(lines.slice(index, index + MESSAGE_LINES_PER_PAGE));
+        }
+        return pages.length ? pages : [[""]];
+      }
+
+      function wrapText(text, width) {
+        const lines = [];
+        for (const paragraph of text.replaceAll("\r", "").split("\n")) {
+          if (!paragraph) {
+            lines.push("");
+            continue;
+          }
+          let remaining = paragraph;
+          while (remaining.length > width) {
+            let split = remaining.lastIndexOf(" ", width);
+            if (split <= 0) split = width;
+            lines.push(remaining.slice(0, split));
+            remaining = remaining.slice(split).trimStart();
+          }
+          lines.push(remaining);
+        }
+        return lines.length ? lines : [""];
+      }
+
+      function selectReaderMessage(messages) {
+        if (state.awaitingResponse) {
+          const assistant = [...messages].reverse().find((message) => (
+            message.role === "assistant" && message.id !== state.responseBaselineId
+          ));
+          if (assistant) {
+            state.readerMessageId = assistant.id;
+            state.readerPage = 0;
+            state.awaitingResponse = false;
+          }
+          return;
+        }
+        if (!state.readerMessageId && messages.length) {
+          const latest = messages[messages.length - 1];
+          state.readerMessageId = latest.id;
+          state.readerPage = paginateMessage(latest.text).length - 1;
+        }
+      }
+
+      function latestAssistantId(messages = state.thread?.messages || []) {
+        return [...messages].reverse().find((message) => message.role === "assistant")?.id ?? null;
+      }
+
+      function lastThreadPage() {
+        return Math.max(0, Math.ceil(state.threads.length / THREADS_PER_PAGE) - 1);
+      }
+
+      function pageForward() {
+        if (state.view === "threads") {
+          state.threadPage = Math.min(lastThreadPage(), state.threadPage + 1);
           render();
           return;
         }
-        state.selected = (state.selected + 1) % (state.threads.length + 1);
+        const messages = state.thread?.messages || [];
+        const selection = readerSelection(messages);
+        if (!selection) return;
+        if (selection.page + 1 < selection.pageCount) {
+          state.readerPage = selection.page + 1;
+        } else if (selection.messageIndex + 1 < messages.length) {
+          state.readerMessageId = messages[selection.messageIndex + 1].id;
+          state.readerPage = 0;
+        }
         render();
       }
 
-      function openSelectedThread() {
-        if (state.view !== "threads") return;
-        if (state.selected === 0) {
-          send({ type: "create_thread" });
+      function pageBack() {
+        if (state.view === "threads") {
+          state.threadPage = Math.max(0, state.threadPage - 1);
+          render();
           return;
         }
-        const thread = state.threads[state.selected - 1];
-        if (thread) send({ type: "open_thread", threadId: thread.id });
+        const messages = state.thread?.messages || [];
+        const selection = readerSelection(messages);
+        if (!selection) return;
+        if (selection.page > 0) {
+          state.readerPage = selection.page - 1;
+        } else if (selection.messageIndex > 0) {
+          const previous = messages[selection.messageIndex - 1];
+          state.readerMessageId = previous.id;
+          state.readerPage = paginateMessage(previous.text).length - 1;
+        }
+        render();
+      }
+
+      function backToThreads() {
+        state.view = "threads";
+        state.awaitingResponse = false;
+        send({ type: "list_threads" });
+        render();
+      }
+
+      function createThread() {
+        if (state.view !== "threads") return;
+        state.thread = null;
+        state.readerMessageId = null;
+        state.readerPage = 0;
+        state.view = "thread";
+        send({ type: "create_thread" });
+        render();
+      }
+
+      function openThread(index) {
+        if (state.view !== "threads") return;
+        const thread = state.threads[index];
+        if (!thread) return;
+        state.thread = null;
+        state.readerMessageId = null;
+        state.readerPage = 0;
+        state.view = "thread";
+        send({ type: "open_thread", threadId: thread.id });
+        render();
       }
 
       async function startTalk() {
@@ -674,6 +884,10 @@
         audioContext = null;
         audioSource = null;
         audioProcessor = null;
+        state.responseBaselineId = latestAssistantId();
+        state.readerMessageId = null;
+        state.readerPage = 0;
+        state.awaitingResponse = true;
         send({ type: "audio_end" });
         render();
       }
@@ -740,7 +954,7 @@
       }
 
       buttonA.addEventListener("click", () => {
-        if (state.view === "threads") openSelectedThread();
+        if (state.view === "threads") createThread();
       });
       buttonA.addEventListener("pointerdown", (event) => {
         if (state.view !== "thread") return;
@@ -754,19 +968,48 @@
         stopTalk();
       });
       buttonA.addEventListener("pointercancel", stopTalk);
-      buttonB.addEventListener("click", nextThread);
+
+      let gestureStart = null;
+      let suppressScreenTap = false;
+      screen.addEventListener("pointerdown", (event) => {
+        if (event.pointerType === "mouse" && event.button !== 0) return;
+        gestureStart = { x: event.clientX, y: event.clientY };
+      });
+      screen.addEventListener("pointerup", (event) => {
+        if (!gestureStart) return;
+        const dx = event.clientX - gestureStart.x;
+        const dy = event.clientY - gestureStart.y;
+        gestureStart = null;
+        if (Math.abs(dy) < 44 || Math.abs(dy) < Math.abs(dx) * 1.2) return;
+        suppressScreenTap = true;
+        event.preventDefault();
+        if (dy > 0) pageForward();
+        else pageBack();
+        window.setTimeout(() => {
+          suppressScreenTap = false;
+        }, 0);
+      });
+      screen.addEventListener("pointercancel", () => {
+        gestureStart = null;
+      });
+      screen.addEventListener("click", (event) => {
+        if (suppressScreenTap) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }, true);
 
       document.addEventListener("keydown", (event) => {
         if (event.repeat) return;
         if (event.code === "ArrowDown" || event.code === "ArrowRight") {
           event.preventDefault();
-          nextThread();
-        } else if (event.code === "Enter" && state.view === "threads") {
+          pageForward();
+        } else if (event.code === "ArrowUp" || event.code === "ArrowLeft") {
           event.preventDefault();
-          openSelectedThread();
+          pageBack();
         } else if (event.code === "Escape" && state.view === "thread") {
           event.preventDefault();
-          nextThread();
+          backToThreads();
         } else if (event.code === "Space" && state.view === "thread") {
           event.preventDefault();
           void startTalk();

@@ -8,6 +8,12 @@
  * @brief Hardware accessors and board-specific control helpers.
  */
 namespace Board {
+struct TouchPoint {
+  bool pressed = false;
+  int16_t x = 0;
+  int16_t y = 0;
+};
+
 /// Initialize board peripherals.
 bool init();
 
@@ -18,7 +24,13 @@ const DeviceCapabilities &capabilities();
 void update();
 
 /// Shared display driver instance.
-Arduino_SH8601 &display();
+Arduino_GFX &display();
+
+/// Whether a supported touch controller was detected.
+bool touchAvailable();
+
+/// Poll the current touch state.
+bool readTouch(TouchPoint &point);
 
 /// Whether button A is currently pressed.
 bool buttonAIsPressed();

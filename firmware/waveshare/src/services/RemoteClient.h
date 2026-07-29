@@ -13,6 +13,7 @@ struct RemoteThread {
 };
 
 struct RemoteMessage {
+  String id;
   String role;
   String text;
   String status;
@@ -51,6 +52,7 @@ public:
   bool sendAudio(const uint8_t *data, size_t length);
   bool endAudio();
   bool interrupt(const String &threadId);
+  void clearActiveThread();
 
 private:
   websockets::WebsocketsClient _ws;

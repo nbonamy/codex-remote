@@ -21,6 +21,9 @@
 #ifndef CODEX_REMOTE_SERVER_PORT
 #define CODEX_REMOTE_SERVER_PORT 47776
 #endif
+#ifndef CODEX_REMOTE_BOARD_V2
+#define CODEX_REMOTE_BOARD_V2 0
+#endif
 
 constexpr const char *WIFI_SSID = CODEX_REMOTE_WIFI_SSID;
 constexpr const char *WIFI_PASSWORD = CODEX_REMOTE_WIFI_PASSWORD;
@@ -54,6 +57,9 @@ constexpr int LCD_CS_PIN = 12;
 
 constexpr int BOARD_I2C_SDA_PIN = 15;
 constexpr int BOARD_I2C_SCL_PIN = 14;
+constexpr int TOUCH_INTERRUPT_PIN = 21;
+constexpr uint8_t TOUCH_FT3168_ADDRESS = 0x38;
+constexpr uint8_t TOUCH_CST820_ADDRESS = 0x15;
 
 constexpr gpio_num_t BUTTON_A_PIN = GPIO_NUM_0;
 constexpr gpio_num_t BUTTON_B_PIN = GPIO_NUM_NC;

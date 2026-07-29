@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseDeviceCommand,
   REALTIME_SAMPLE_RATE,
+  toDeviceMessages,
 } from '../src/server/protocol';
 
 describe('device protocol', () => {
@@ -28,5 +29,16 @@ describe('device protocol', () => {
     expect(() => parseDeviceCommand({
       type: 'unknown',
     })).toThrow("Unknown control frame 'unknown'");
+  });
+
+  it('preserves complete message text for device-side pagination', () => {
+    const text = `first line\n${'response '.repeat(600).trim()}`;
+
+    expect(toDeviceMessages([{
+      id: 'message-1',
+      role: 'assistant',
+      status: 'complete',
+      parts: [{ type: 'text', text }],
+    }])[0]?.text).toBe(text);
   });
 });

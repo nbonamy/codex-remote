@@ -80,7 +80,7 @@ export function toDeviceMessages(messages: readonly SurfaceMessage[]): DeviceMes
       id: message.id,
       role: message.role,
       status: message.status,
-      text: boundedText(messageText(message), 3_500),
+      text: normalizedMessageText(messageText(message)),
     }))
     .filter((message) => message.text.length > 0);
 }
@@ -179,6 +179,10 @@ function optionalString(value: unknown): string | undefined {
 function boundedText(value: string, max: number): string {
   const normalized = value.replace(/\s+/g, ' ').trim();
   return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1)}…`;
+}
+
+function normalizedMessageText(value: string): string {
+  return value.replace(/\r\n?/g, '\n').trim();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

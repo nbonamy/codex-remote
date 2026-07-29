@@ -13,8 +13,14 @@ Arduino_DataBus *displayBus =
     new Arduino_ESP32QSPI(LCD_CS_PIN, LCD_SCLK_PIN, LCD_SDIO0_PIN,
                           LCD_SDIO1_PIN, LCD_SDIO2_PIN, LCD_SDIO3_PIN);
 /// Shared display panel instance.
+#if CODEX_REMOTE_BOARD_V2
+Arduino_CO5300 *displayPanel =
+    new Arduino_CO5300(displayBus, GFX_NOT_DEFINED, 0, SCREEN_WIDTH_PX,
+                       SCREEN_HEIGHT_PX, 16, 0, 0, 0);
+#else
 Arduino_SH8601 *displayPanel = new Arduino_SH8601(
     displayBus, GFX_NOT_DEFINED, 0, SCREEN_WIDTH_PX, SCREEN_HEIGHT_PX);
+#endif
 
 /// Power-management IC driver instance.
 XPowersPMU pmu;
@@ -26,6 +32,12 @@ bool pwrPressed = false;
 unsigned long pwrPulseUntilMs = 0;
 /// Timestamp of the last PMU IRQ poll.
 unsigned long lastPmuPollMs = 0;
+/// Detected touch controller address, or zero when unavailable.
+uint8_t touchAddress = 0;
+/// Last cached touch state.
+Board::TouchPoint cachedTouch;
+/// Timestamp of the last touch-controller poll.
+unsigned long lastTouchPollMs = 0;
 /// Last brightness written to the display.
 uint8_t currentBrightness = DEFAULT_BRIGHTNESS;
 const DeviceCapabilities kCapabilities = {.externalSpeakerSwitch = false,
@@ -49,6 +61,53 @@ void enablePmuAdc() {
   pmu.enableVbusVoltageMeasure();
   pmu.enableBattVoltageMeasure();
   pmu.enableSystemVoltageMeasure();
+}
+
+bool i2cDevicePresent(uint8_t address) {
+  Wire.beginTransmission(address);
+  return Wire.endTransmission() == 0;
+}
+
+bool writeI2cRegister(uint8_t address, uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(address);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool readI2cRegisters(uint8_t address, uint8_t reg, uint8_t *data,
+                      size_t length) {
+  Wire.beginTransmission(address);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  if (Wire.requestFrom(address, static_cast<uint8_t>(length)) != length) {
+    return false;
+  }
+  for (size_t index = 0; index < length; index++) {
+    data[index] = Wire.read();
+  }
+  return true;
+}
+
+void initTouch() {
+  pinMode(TOUCH_INTERRUPT_PIN, INPUT_PULLUP);
+  if (i2cDevicePresent(TOUCH_CST820_ADDRESS)) {
+    touchAddress = TOUCH_CST820_ADDRESS;
+    // Periodic touch interrupts; polling remains the source of coordinates.
+    writeI2cRegister(touchAddress, 0xFA, 0x40);
+    Log::client("Board", "CST820 touch online");
+    return;
+  }
+  if (i2cDevicePresent(TOUCH_FT3168_ADDRESS)) {
+    touchAddress = TOUCH_FT3168_ADDRESS;
+    // Monitor mode is the Waveshare default for the FT3168.
+    writeI2cRegister(touchAddress, 0xA5, 0x01);
+    Log::client("Board", "FT3168 touch online");
+    return;
+  }
+  Log::client("Board", "touch controller not found");
 }
 
 /**
@@ -122,6 +181,7 @@ bool init() {
     Log::client("Board", "AXP2101 not found");
   }
 
+  initTouch();
   return true;
 }
 
@@ -134,7 +194,40 @@ void update() { pollPmuButton(); }
  * @brief Access the shared display driver.
  * @return Reference to the display panel.
  */
-Arduino_SH8601 &display() { return *displayPanel; }
+Arduino_GFX &display() { return *displayPanel; }
+
+bool touchAvailable() { return touchAddress != 0; }
+
+bool readTouch(TouchPoint &point) {
+  const unsigned long now = millis();
+  if (now - lastTouchPollMs < 12) {
+    point = cachedTouch;
+    return point.pressed;
+  }
+  lastTouchPollMs = now;
+  if (touchAddress == 0) {
+    cachedTouch = {};
+    point = cachedTouch;
+    return false;
+  }
+
+  uint8_t data[5] = {};
+  if (!readI2cRegisters(touchAddress, 0x02, data, sizeof(data))) {
+    cachedTouch = {};
+    point = cachedTouch;
+    return false;
+  }
+  const int fingers = data[0] & 0x0F;
+  const int x = ((data[1] & 0x0F) << 8) | data[2];
+  const int y = ((data[3] & 0x0F) << 8) | data[4];
+  cachedTouch.pressed =
+      fingers > 0 && x >= 0 && x < SCREEN_WIDTH_PX && y >= 0 &&
+      y < SCREEN_HEIGHT_PX;
+  cachedTouch.x = x;
+  cachedTouch.y = y;
+  point = cachedTouch;
+  return point.pressed;
+}
 
 /**
  * @brief Read the current state of button A.

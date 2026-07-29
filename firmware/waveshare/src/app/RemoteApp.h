@@ -20,22 +20,44 @@ private:
   RemoteClient _client;
   AudioService _audio;
   View _view = View::Threads;
-  int _selectedThread = 0;
+  int _threadPage = 0;
+  String _readerMessageId;
+  int _readerPage = 0;
+  bool _awaitingResponse = false;
+  String _responseBaselineId;
   bool _recording = false;
   bool _buttonAPrevious = false;
   bool _buttonBPrevious = false;
+  bool _touchActive = false;
+  int16_t _touchStartX = 0;
+  int16_t _touchStartY = 0;
+  int16_t _touchLastX = 0;
+  int16_t _touchLastY = 0;
   bool _playbackActive = false;
   bool _dirty = true;
   unsigned long _lastDrawMs = 0;
 
   void handleButtons();
+  void handleTouch();
+  void handleTap(int x, int y);
+  void pageForward();
+  void pageBack();
+  void openThread(int index);
+  void createThread();
+  void backToThreads();
   void startRecording();
   void stopRecording();
+  void updateReaderSelection();
+  int readerMessageIndex() const;
+  int messagePageCount(const RemoteMessage &message) const;
+  String latestAssistantId() const;
   void draw();
   void drawHeader();
   void drawThreads();
   void drawConversation();
-  void drawFooter(const char *left, const char *right);
-  void drawWrappedText(const String &text, int x, int &y, int width,
-                       int maxLines, uint16_t color, uint8_t size = 1);
+  void drawFooter(const char *label);
+  void drawMessageTextPage(const String &text, int page, int x, int y,
+                           int charactersPerLine, int linesPerPage,
+                           uint16_t color);
+  int wrappedLineCount(const String &text, int charactersPerLine) const;
 };
