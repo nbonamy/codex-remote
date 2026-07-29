@@ -16,6 +16,7 @@ constexpr uint16_t kCyan = 0x66BF;
 constexpr uint16_t kCoral = 0xFB4B;
 constexpr uint16_t kYellow = 0xFE88;
 constexpr int kThreadsPerPage = 5;
+constexpr int kBridgesPerPage = 5;
 constexpr int kMessageCharactersPerLine = 50;
 constexpr int kMessageLinesPerPage = 28;
 constexpr int kSwipeThresholdPx = 48;
@@ -72,6 +73,14 @@ void RemoteApp::onRemoteStateChanged() {
   const int lastPage =
       max(0, (_client.threadCount() + kThreadsPerPage - 1) / kThreadsPerPage - 1);
   _threadPage = min(_threadPage, lastPage);
+  const int lastBridgePage =
+      max(0, (_client.bridgeCount() + kBridgesPerPage - 1) /
+                     kBridgesPerPage -
+                 1);
+  _bridgePage = min(_bridgePage, lastBridgePage);
+  if (_view == View::Bridges && _client.connected()) {
+    _view = View::Threads;
+  }
   updateReaderSelection();
   _dirty = true;
 }
@@ -98,12 +107,22 @@ void RemoteApp::handleButtons() {
     if (buttonA && !_buttonAPrevious) {
       createThread();
     }
-  } else {
+    if (buttonB && !_buttonBPrevious) {
+      showBridges();
+    }
+  } else if (_view == View::Conversation) {
     if (buttonA && !_buttonAPrevious) {
       startRecording();
     }
     if (!buttonA && _buttonAPrevious && _recording) {
       stopRecording();
+    }
+  } else {
+    if (buttonA && !_buttonAPrevious && !_client.pairingPending()) {
+      _client.refreshBridges();
+    }
+    if (buttonB && !_buttonBPrevious) {
+      closeBridges();
     }
   }
 
@@ -156,6 +175,17 @@ void RemoteApp::handleTap(int x, int y) {
     openThread(_threadPage * kThreadsPerPage + visibleIndex);
     return;
   }
+  if (_view == View::Bridges) {
+    if (_client.pairingPending() || y < 84 || y >= 374) {
+      return;
+    }
+    const int visibleIndex = (y - 84) / 58;
+    if (visibleIndex < 0 || visibleIndex >= kBridgesPerPage) {
+      return;
+    }
+    _client.selectBridge(_bridgePage * kBridgesPerPage + visibleIndex);
+    return;
+  }
   if (x < 58 && y >= 56 && y <= 112 && !_recording) {
     backToThreads();
   }
@@ -166,6 +196,15 @@ void RemoteApp::pageForward() {
     const int lastPage =
         max(0, (_client.threadCount() + kThreadsPerPage - 1) / kThreadsPerPage - 1);
     _threadPage = min(lastPage, _threadPage + 1);
+    _dirty = true;
+    return;
+  }
+  if (_view == View::Bridges) {
+    const int lastPage =
+        max(0, (_client.bridgeCount() + kBridgesPerPage - 1) /
+                       kBridgesPerPage -
+                   1);
+    _bridgePage = min(lastPage, _bridgePage + 1);
     _dirty = true;
     return;
   }
@@ -189,6 +228,11 @@ void RemoteApp::pageForward() {
 void RemoteApp::pageBack() {
   if (_view == View::Threads) {
     _threadPage = max(0, _threadPage - 1);
+    _dirty = true;
+    return;
+  }
+  if (_view == View::Bridges) {
+    _bridgePage = max(0, _bridgePage - 1);
     _dirty = true;
     return;
   }
@@ -241,6 +285,19 @@ void RemoteApp::backToThreads() {
   _view = View::Threads;
   _awaitingResponse = false;
   _client.listThreads();
+  _dirty = true;
+}
+
+void RemoteApp::showBridges() {
+  _view = View::Bridges;
+  _bridgePage = 0;
+  _client.beginBridgeSelection();
+  _dirty = true;
+}
+
+void RemoteApp::closeBridges() {
+  _view = View::Threads;
+  _client.cancelBridgeSelection();
   _dirty = true;
 }
 
@@ -334,10 +391,13 @@ void RemoteApp::draw() {
   drawHeader();
   if (_view == View::Threads) {
     drawThreads();
-    drawFooter("BOOT  New thread");
-  } else {
+    drawFooter("BOOT New thread     PWR Bridges");
+  } else if (_view == View::Conversation) {
     drawConversation();
     drawFooter(_recording ? "BOOT  Release" : "BOOT  Hold to talk");
+  } else {
+    drawBridges();
+    drawFooter("BOOT Refresh       PWR Back");
   }
   _lastDrawMs = millis();
   _dirty = false;
@@ -391,6 +451,67 @@ void RemoteApp::drawThreads() {
     display.setTextColor(kMuted);
     display.setCursor(48, y + 29);
     display.print(_client.thread(index).preview.substring(0, 47));
+  }
+}
+
+void RemoteApp::drawBridges() {
+  Arduino_GFX &display = Board::display();
+  display.setTextSize(1);
+  if (_client.pairingPending()) {
+    display.setTextColor(kMuted);
+    display.setCursor(16, 72);
+    display.print("PAIRING WITH");
+    display.setTextSize(2);
+    display.setTextColor(kWhite);
+    display.setCursor(16, 96);
+    display.print(_client.selectedBridgeName().substring(0, 27));
+    display.fillRoundRect(14, 139, 340, 154, 12, kPanel);
+    display.setTextSize(1);
+    display.setTextColor(kMuted);
+    display.setCursor(111, 171);
+    display.print("CONFIRM THIS CODE");
+    display.setTextSize(4);
+    display.setTextColor(kMint);
+    display.setCursor(103, 204);
+    display.print(_client.pairingCode());
+    display.setTextSize(1);
+    display.setTextColor(kMuted);
+    display.setCursor(68, 268);
+    display.print("Approve it in the Mac menu bar");
+    return;
+  }
+
+  display.setTextColor(kMuted);
+  display.setCursor(16, 69);
+  const int first = _bridgePage * kBridgesPerPage;
+  const int last = min(_client.bridgeCount(), first + kBridgesPerPage);
+  if (_client.bridgeCount() == 0) {
+    display.print("NO BRIDGES FOUND");
+    display.setCursor(16, 92);
+    display.print("Open Codex Remote on a computer.");
+    return;
+  }
+  display.printf("%d-%d / %d BRIDGES", first + 1, last,
+                 _client.bridgeCount());
+  for (int visible = 0; visible < kBridgesPerPage; visible++) {
+    const int index = first + visible;
+    if (index >= _client.bridgeCount()) {
+      break;
+    }
+    const RemoteBridge &bridge = _client.bridge(index);
+    const int y = 84 + visible * 58;
+    display.fillRoundRect(14, y, 340, 50, 11,
+                          bridge.selected ? kPanelSelected : kPanel);
+    display.setTextColor(bridge.paired ? kMint : kMuted);
+    display.setCursor(26, y + 19);
+    display.print(bridge.paired ? "*" : "+");
+    display.setTextColor(kWhite);
+    display.setCursor(48, y + 9);
+    display.print(bridge.name.substring(0, 42));
+    display.setTextColor(kMuted);
+    display.setCursor(48, y + 29);
+    display.print(bridge.paired ? "PAIRED - TAP TO CONNECT"
+                                : "NEW - TAP TO PAIR");
   }
 }
 

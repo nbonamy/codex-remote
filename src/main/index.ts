@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import {
   app,
@@ -15,6 +15,7 @@ import {
   transcribeWithAppleSpeechAnalyzer,
 } from 'codex-app-sdk/node';
 import simulatorHtml from '../server/simulator.html?raw';
+import { PairingStore } from '../server/pairing-store';
 import { CodexRemoteServer } from '../server/remote-server';
 import type { CodexRemoteDesktopState } from './contracts';
 import { trayMenuTemplate } from './tray-menu';
@@ -24,11 +25,16 @@ const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAA
 let tray: Tray | null = null;
 let surface: CodexSurface | null = null;
 let remoteServer: CodexRemoteServer | null = null;
+let pairingStore: PairingStore | null = null;
+let pairingTimer: NodeJS.Timeout | null = null;
 let desktopState: CodexRemoteDesktopState = {
   phase: 'starting',
   codexStatus: 'idle',
   accountLabel: null,
   error: null,
+  pairingOpenUntil: null,
+  pairedDeviceCount: 0,
+  pendingPairings: [],
   server: null,
 };
 
@@ -72,6 +78,19 @@ function refreshTrayMenu(): void {
         });
       });
     },
+    openPairing: () => {
+      const expiresAt = pairingStore?.openPairingWindow();
+      if (expiresAt) schedulePairingRefresh(expiresAt);
+    },
+    closePairing: () => pairingStore?.closePairingWindow(),
+    approvePairing: (requestId) => {
+      void pairingStore?.approve(requestId).catch((error) => {
+        publishState({
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    },
+    rejectPairing: (requestId) => pairingStore?.reject(requestId),
     quit: () => app.quit(),
   })));
 }
@@ -80,6 +99,12 @@ async function startServices(): Promise<void> {
   const defaultCwd = process.env.CODEX_REMOTE_CWD?.trim() || join(homedir(), 'src');
   const port = parsedPort(process.env.CODEX_REMOTE_PORT);
   const token = await loadOrCreateToken();
+  pairingStore = await PairingStore.open(
+    join(app.getPath('userData'), 'device-pairings.json'),
+    `Codex Remote on ${hostname()}`,
+  );
+  pairingStore.onChange(refreshPairingState);
+  refreshPairingState();
 
   surface = new CodexSurface({
     cwd: defaultCwd,
@@ -111,6 +136,7 @@ async function startServices(): Promise<void> {
     defaultCwd,
     simulatorHtml,
     port,
+    pairing: pairingStore,
     transcribeAudio: process.platform === 'darwin'
       ? (wave) => transcribeWithAppleSpeechAnalyzer(wave)
       : undefined,
@@ -129,6 +155,28 @@ async function startServices(): Promise<void> {
       token: info.token,
     },
   });
+}
+
+function refreshPairingState(): void {
+  if (!pairingStore) return;
+  publishState({
+    pairingOpenUntil: pairingStore.pairingExpiresAt(),
+    pairedDeviceCount: pairingStore.pairedDevices().length,
+    pendingPairings: pairingStore.pendingRequests().map((request) => ({
+      id: request.id,
+      deviceName: request.deviceName,
+      code: request.code,
+      expiresAt: request.expiresAt,
+    })),
+  });
+}
+
+function schedulePairingRefresh(expiresAt: number): void {
+  if (pairingTimer) clearTimeout(pairingTimer);
+  pairingTimer = setTimeout(() => {
+    pairingTimer = null;
+    refreshPairingState();
+  }, Math.max(0, expiresAt - Date.now()) + 25);
 }
 
 async function loadOrCreateToken(): Promise<string> {
@@ -188,6 +236,8 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  if (pairingTimer) clearTimeout(pairingTimer);
+  pairingTimer = null;
   tray?.destroy();
   tray = null;
   void remoteServer?.close();

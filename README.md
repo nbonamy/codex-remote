@@ -19,6 +19,10 @@ This is the fastest way to iterate before the board arrives.
 - Thread list: tap a thread to open it; swipe down for the next page and up for
   the previous page.
 - Thread list: press BOOT to create and open a new thread.
+- Thread list: press PWR to disconnect and choose another discovered bridge.
+- Bridge list: tap a paired bridge to reconnect, or tap a new bridge to request
+  pairing. Confirm the matching six-digit code from the Mac menu-bar app.
+- Bridge list: press BOOT to rescan and PWR to return to the current bridge.
 - Conversation: hold BOOT to talk; release to transcribe and send to Codex.
 - Conversation: tap the back arrow to return to the thread list.
 - Conversation: swipe down for the next message page and up for the previous
@@ -48,9 +52,9 @@ npm install
 npm run dev
 ```
 
-The API listens on `0.0.0.0:47776` by default. The app generates a random
-device token on first launch and displays it alongside the LAN URL. Override
-the defaults for development with:
+The API listens on `0.0.0.0:47776` by default. The app keeps a persistent
+bridge identity and issues a different credential to every approved device.
+Override the defaults for development with:
 
 ```bash
 CODEX_REMOTE_PORT=47776 \
@@ -80,15 +84,23 @@ authenticated device WebSocket.
 
 ## API
 
-The ESP32 uses one persistent authenticated WebSocket for all communication:
+The ESP32 uses one persistent authenticated WebSocket for normal communication:
 JSON frames carry navigation, commands, transcripts, and state; binary frames
-carry microphone and speaker PCM. It does not call the REST API. HTTP remains
-useful for diagnostics, external integrations, and serving the HTML simulator.
+carry microphone and speaker PCM. It only uses HTTP while pairing: it creates a
+short-lived request and polls for explicit approval from the desktop tray.
+HTTP also remains useful for diagnostics, external integrations, and serving
+the HTML simulator.
 
-All `/api/v1/*` HTTP routes require `X-Codex-Remote-Token`.
+Normal `/api/v1/*` routes require `X-Codex-Remote-Token`. The pairing
+information and request routes are intentionally unauthenticated, but a request
+can only be created during the two-minute window opened by **Pair New Device…**
+in the menu-bar app.
 
 ```text
 GET  /health
+GET  /api/v1/pairing/info
+POST /api/v1/pairing/requests
+GET  /api/v1/pairing/requests/:id
 GET  /api/v1/state
 GET  /api/v1/threads
 GET  /api/v1/threads/:id/messages
@@ -98,7 +110,8 @@ POST /api/v1/threads/:id/interrupt
 WS   /api/v1/device
 ```
 
-The device WebSocket authenticates with the same header and accepts JSON
+The device WebSocket authenticates with its per-device credential in the same
+header and accepts JSON
 control frames plus raw mono PCM16LE audio frames at 24 kHz between
 `audio_start` and `audio_end`. In realtime mode, releasing push-to-talk appends
 a short silence tail so server-side VAD commits the utterance without
@@ -113,9 +126,10 @@ cp firmware/waveshare/src/credentials.h.example \
   firmware/waveshare/src/credentials.h
 ```
 
-Fill in the desktop token and Wi-Fi credentials. Leave `SERVER_HOST` empty to
-discover the Electron app through `_codex-remote._tcp.local`, or set it to the
-desktop LAN IP.
+Fill in the Wi-Fi credentials. Leave `SERVER_HOST` empty to discover every
+Electron bridge through `_codex-remote._tcp.local`, then press PWR on the
+thread list to choose and pair one. `DEVICE_TOKEN` is only an optional
+migration fallback for firmware paired with older host builds.
 
 ```bash
 npm run firmware:build

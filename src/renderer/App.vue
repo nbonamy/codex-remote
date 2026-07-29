@@ -7,6 +7,9 @@ const state = ref<CodexRemoteDesktopState>({
   codexStatus: 'idle',
   accountLabel: null,
   error: null,
+  pairingOpenUntil: null,
+  pairedDeviceCount: 0,
+  pendingPairings: [],
   server: null,
 });
 let unsubscribe: () => void = () => undefined;

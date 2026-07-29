@@ -34,6 +34,7 @@ import type {
   RemoteRealtimeBridge,
   RemoteRealtimePeer,
 } from './realtime-media';
+import { PairingError, type PairingStore } from './pairing-store';
 import { pcm16LeToWave } from './wav';
 
 export type RemoteServerInfo = {
@@ -55,6 +56,7 @@ export type RemoteServerOptions = {
   port?: number;
   advertise?: boolean;
   realtimeBridge?: RemoteRealtimeBridge;
+  pairing?: PairingStore;
   transcribeAudio?: (wave: Buffer) => Promise<{
     text: string;
     error?: string;
@@ -166,13 +168,19 @@ export class CodexRemoteServer {
     if (this.options.advertise !== false && port !== 0) {
       this.bonjour = new Bonjour();
       this.mdnsService = this.bonjour.publish({
-        name: `Codex Remote on ${os.hostname()}`,
+        name: this.options.pairing?.bridgeName ?? `Codex Remote on ${os.hostname()}`,
         type: 'codex-remote',
         protocol: 'tcp',
         port,
         txt: {
           api: String(API_VERSION),
           path: '/api/v1/device',
+          ...(this.options.pairing
+            ? {
+                bridgeId: this.options.pairing.bridgeId,
+                bridgeName: this.options.pairing.bridgeName,
+              }
+            : {}),
         },
       });
     }
@@ -252,6 +260,54 @@ export class CodexRemoteServer {
         return;
       }
 
+      if (
+        request.method === 'GET'
+        && url.pathname === '/api/v1/pairing/info'
+        && this.options.pairing
+      ) {
+        sendJson(response, 200, {
+          bridgeId: this.options.pairing.bridgeId,
+          bridgeName: this.options.pairing.bridgeName,
+          pairingEnabled: this.options.pairing.isPairingOpen(),
+        });
+        return;
+      }
+
+      if (
+        request.method === 'POST'
+        && url.pathname === '/api/v1/pairing/requests'
+        && this.options.pairing
+      ) {
+        const body = await readJsonBody(request);
+        const pairingRequest = this.options.pairing.createRequest(
+          shortRecordString(body, 'deviceId', 96),
+          shortRecordString(body, 'deviceName', 64),
+        );
+        sendJson(response, 201, {
+          requestId: pairingRequest.id,
+          code: pairingRequest.code,
+          bridgeId: this.options.pairing.bridgeId,
+          bridgeName: this.options.pairing.bridgeName,
+          expiresAt: new Date(pairingRequest.expiresAt).toISOString(),
+        });
+        return;
+      }
+
+      const pairingResultMatch = url.pathname.match(
+        /^\/api\/v1\/pairing\/requests\/([^/]+)$/,
+      );
+      if (
+        request.method === 'GET'
+        && pairingResultMatch
+        && this.options.pairing
+      ) {
+        sendJson(response, 200, this.options.pairing.requestResult(
+          decodeURIComponent(pairingResultMatch[1]!),
+          url.searchParams.get('deviceId') ?? '',
+        ));
+        return;
+      }
+
       if (!url.pathname.startsWith('/api/v1/') || !this.isAuthorized(request, url, true)) {
         sendJson(response, url.pathname.startsWith('/api/v1/') ? 401 : 404, {
           error: url.pathname.startsWith('/api/v1/') ? 'Unauthorized' : 'Not found',
@@ -317,7 +373,9 @@ export class CodexRemoteServer {
       sendJson(response, 404, { error: 'Not found' });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const status = (
+      const status = error instanceof PairingError
+        ? error.statusCode
+        : (
         message.includes('must be')
         || message.includes('too long')
         || message.includes('JSON')
@@ -333,7 +391,13 @@ export class CodexRemoteServer {
   ): boolean {
     const header = request.headers['x-codex-remote-token'];
     const headerToken = Array.isArray(header) ? header[0] : header;
-    if (headerToken && safeTokenEquals(headerToken, this.options.token)) return true;
+    if (
+      headerToken
+      && (
+        safeTokenEquals(headerToken, this.options.token)
+        || this.options.pairing?.isAuthorized(headerToken)
+      )
+    ) return true;
     return allowLoopbackQuery
       && isLoopback(request.socket.remoteAddress)
       && safeTokenEquals(url.searchParams.get('token') ?? '', this.options.token);
@@ -800,6 +864,22 @@ function recordString(
   }
   if (value.trim().length > MAX_PROMPT_CHARS) throw new Error(`${key} is too long`);
   return value.trim();
+}
+
+function shortRecordString(
+  record: Record<string, unknown>,
+  key: string,
+  maxLength: number,
+): string {
+  const value = record[key];
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new PairingError(400, `${key} must be a non-empty string`);
+  }
+  const result = value.trim();
+  if (result.length > maxLength) {
+    throw new PairingError(400, `${key} must be at most ${maxLength} characters`);
+  }
+  return result;
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {

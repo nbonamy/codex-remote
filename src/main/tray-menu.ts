@@ -3,6 +3,10 @@ import type { CodexRemoteDesktopState } from './contracts';
 
 export type TrayMenuActions = {
   openSimulator(): void;
+  openPairing(): void;
+  closePairing(): void;
+  approvePairing(requestId: string): void;
+  rejectPairing(requestId: string): void;
   quit(): void;
 };
 
@@ -28,6 +32,36 @@ export function trayMenuTemplate(
       enabled: simulatorReady,
       click: actions.openSimulator,
     },
+    {
+      label: state.pairingOpenUntil && state.pairingOpenUntil > Date.now()
+        ? 'Stop Pairing'
+        : 'Pair New Device…',
+      enabled: simulatorReady,
+      click: state.pairingOpenUntil && state.pairingOpenUntil > Date.now()
+        ? actions.closePairing
+        : actions.openPairing,
+    },
+    ...(state.pendingPairings.map((request) => ({
+      label: `${request.deviceName} · ${request.code}`,
+      submenu: [
+        {
+          label: `Approve ${request.code}`,
+          click: () => actions.approvePairing(request.id),
+        },
+        {
+          label: 'Reject',
+          click: () => actions.rejectPairing(request.id),
+        },
+      ],
+    }))),
+    ...(state.pairedDeviceCount > 0
+      ? [{
+          label: `${state.pairedDeviceCount} paired device${
+            state.pairedDeviceCount === 1 ? '' : 's'
+          }`,
+          enabled: false,
+        }]
+      : []),
     { type: 'separator' },
     {
       label: 'Quit Codex Remote',

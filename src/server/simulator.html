@@ -501,6 +501,9 @@
       const state = {
         connected: false,
         view: "threads",
+        bridges: [],
+        bridgePage: 0,
+        switchingBridge: false,
         threads: [],
         threadPage: 0,
         thread: null,
@@ -533,6 +536,7 @@
       let playbackCursor = 0;
 
       function connect() {
+        if (state.switchingBridge) return;
         if (!token) {
           showToast("Missing simulator token. Open this page from the Electron app.");
           return;
@@ -549,9 +553,9 @@
         socket.addEventListener("close", () => {
           state.connected = false;
           connection.classList.remove("online");
-          connectionLabel.textContent = "Retrying";
+          connectionLabel.textContent = state.switchingBridge ? "Choose host" : "Retrying";
           render();
-          window.setTimeout(connect, 1500);
+          if (!state.switchingBridge) window.setTimeout(connect, 1500);
         });
         socket.addEventListener("message", (event) => {
           if (typeof event.data !== "string") {
@@ -600,14 +604,23 @@
 
       function render() {
         connection.classList.toggle("online", state.connected);
-        controls.classList.add("single");
-        buttonB.hidden = true;
         if (state.view === "threads") {
+          controls.classList.remove("single");
+          buttonB.hidden = false;
           renderThreads();
           buttonALabel.textContent = "New thread";
-        } else {
+          buttonBLabel.textContent = "Bridges";
+        } else if (state.view === "thread") {
+          controls.classList.add("single");
+          buttonB.hidden = true;
           renderConversation();
           buttonALabel.textContent = state.recording ? "Release" : "Hold to talk";
+        } else {
+          controls.classList.remove("single");
+          buttonB.hidden = false;
+          renderBridges();
+          buttonALabel.textContent = "Refresh";
+          buttonBLabel.textContent = "Back";
         }
         recordingOverlay.classList.toggle("visible", state.recording);
       }
@@ -645,6 +658,39 @@
         const first = state.threadPage * THREADS_PER_PAGE + 1;
         const last = Math.min(state.threads.length, first + THREADS_PER_PAGE - 1);
         return `${first}–${last} of ${state.threads.length} threads`;
+      }
+
+      function renderBridges() {
+        const start = state.bridgePage * THREADS_PER_PAGE;
+        const entries = state.bridges.slice(start, start + THREADS_PER_PAGE);
+        screen.innerHTML = `
+          <p class="eyebrow">${bridgePageLabel()}</p>
+          <div class="thread-list">
+            ${entries.map((bridge, visibleIndex) => `
+              <article class="thread-card" data-bridge-index="${start + visibleIndex}">
+                <span class="thread-icon">${bridge.paired ? "•" : "+"}</span>
+                <div class="thread-copy">
+                  <div class="thread-title">${escapeHtml(bridge.name)}</div>
+                  <div class="thread-preview">${bridge.paired ? "Paired · tap to connect" : "New · tap to pair"}</div>
+                </div>
+                <span class="thread-age">${bridge.selected ? "active" : ""}</span>
+              </article>
+            `).join("")}
+          </div>
+          ${entries.length <= 1 ? '<div class="empty">The browser cannot scan mDNS. The ESP32 will show every bridge on your Wi-Fi.</div>' : ""}
+        `;
+        screen.querySelectorAll("[data-bridge-index]").forEach((element) => {
+          element.addEventListener("click", () => {
+            selectSimulatorBridge(Number(element.dataset.bridgeIndex));
+          });
+        });
+      }
+
+      function bridgePageLabel() {
+        if (state.bridges.length === 0) return "No bridges found";
+        const first = state.bridgePage * THREADS_PER_PAGE + 1;
+        const last = Math.min(state.bridges.length, first + THREADS_PER_PAGE - 1);
+        return `${first}–${last} of ${state.bridges.length} bridges`;
       }
 
       function renderConversation() {
@@ -772,6 +818,15 @@
           render();
           return;
         }
+        if (state.view === "bridges") {
+          const lastPage = Math.max(
+            0,
+            Math.ceil(state.bridges.length / THREADS_PER_PAGE) - 1,
+          );
+          state.bridgePage = Math.min(lastPage, state.bridgePage + 1);
+          render();
+          return;
+        }
         const messages = state.thread?.messages || [];
         const selection = readerSelection(messages);
         if (!selection) return;
@@ -787,6 +842,11 @@
       function pageBack() {
         if (state.view === "threads") {
           state.threadPage = Math.max(0, state.threadPage - 1);
+          render();
+          return;
+        }
+        if (state.view === "bridges") {
+          state.bridgePage = Math.max(0, state.bridgePage - 1);
           render();
           return;
         }
@@ -808,6 +868,51 @@
         state.awaitingResponse = false;
         send({ type: "list_threads" });
         render();
+      }
+
+      async function loadBridgeInfo() {
+        try {
+          const response = await fetch("/api/v1/pairing/info", {
+            cache: "no-store",
+          });
+          if (!response.ok) throw new Error("Bridge info unavailable");
+          const bridge = await response.json();
+          state.bridges = [{
+            id: bridge.bridgeId,
+            name: bridge.bridgeName,
+            paired: true,
+            selected: true,
+          }];
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : String(error));
+        }
+        render();
+      }
+
+      function showBridgeSelector() {
+        if (state.view !== "threads") return;
+        state.switchingBridge = true;
+        state.view = "bridges";
+        state.bridgePage = 0;
+        socket?.close();
+        void loadBridgeInfo();
+        render();
+      }
+
+      function closeBridgeSelector() {
+        if (state.view !== "bridges") return;
+        state.switchingBridge = false;
+        state.view = "threads";
+        connect();
+        render();
+      }
+
+      function selectSimulatorBridge(index) {
+        const bridge = state.bridges[index];
+        if (!bridge) return;
+        // This page is served by one bridge, while the ESP32 discovers all of
+        // them over mDNS and stores a credential for each.
+        closeBridgeSelector();
       }
 
       function createThread() {
@@ -955,6 +1060,11 @@
 
       buttonA.addEventListener("click", () => {
         if (state.view === "threads") createThread();
+        else if (state.view === "bridges") void loadBridgeInfo();
+      });
+      buttonB.addEventListener("click", () => {
+        if (state.view === "threads") showBridgeSelector();
+        else if (state.view === "bridges") closeBridgeSelector();
       });
       buttonA.addEventListener("pointerdown", (event) => {
         if (state.view !== "thread") return;
@@ -1007,9 +1117,14 @@
         } else if (event.code === "ArrowUp" || event.code === "ArrowLeft") {
           event.preventDefault();
           pageBack();
-        } else if (event.code === "Escape" && state.view === "thread") {
-          event.preventDefault();
-          backToThreads();
+        } else if (event.code === "Escape") {
+          if (state.view === "thread") {
+            event.preventDefault();
+            backToThreads();
+          } else if (state.view === "bridges") {
+            event.preventDefault();
+            closeBridgeSelector();
+          }
         } else if (event.code === "Space" && state.view === "thread") {
           event.preventDefault();
           void startTalk();
@@ -1023,6 +1138,7 @@
       });
 
       render();
+      void loadBridgeInfo();
       connect();
     </script>
   </body>

@@ -3,6 +3,14 @@ export type CodexRemoteDesktopState = {
   codexStatus: 'idle' | 'connecting' | 'ready' | 'error';
   accountLabel: string | null;
   error: string | null;
+  pairingOpenUntil: number | null;
+  pairedDeviceCount: number;
+  pendingPairings: Array<{
+    id: string;
+    deviceName: string;
+    code: string;
+    expiresAt: number;
+  }>;
   server: {
     port: number;
     defaultCwd: string;

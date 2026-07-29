@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
   CodexConversation,
   CodexRealtimeSession,
@@ -13,6 +16,7 @@ import {
   CodexRemoteServer,
   type RemoteServerInfo,
 } from '../src/server/remote-server';
+import { PairingStore } from '../src/server/pairing-store';
 import type {
   RemoteRealtimeBridge,
   RemoteRealtimePeer,
@@ -20,10 +24,83 @@ import type {
 
 const servers: CodexRemoteServer[] = [];
 const sockets: WebSocket[] = [];
+const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   for (const socket of sockets.splice(0)) socket.close();
   await Promise.all(servers.splice(0).map((server) => server.close()));
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => (
+    rm(directory, { recursive: true, force: true })
+  )));
+});
+
+describe('CodexRemoteServer device pairing', () => {
+  it('requires tray authorization then accepts the device-specific token', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'codex-remote-server-'));
+    temporaryDirectories.push(directory);
+    const pairing = await PairingStore.open(
+      join(directory, 'pairings.json'),
+      'Codex Remote on studio',
+    );
+    const server = new CodexRemoteServer({
+      surface: fakeSurface(fakeConversation(new FakeRealtimeSession('thread-1'))),
+      token: 'legacy-device-token',
+      defaultCwd: '/tmp/project',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+      pairing,
+    });
+    servers.push(server);
+    const info = await server.start();
+    const baseUrl = `http://127.0.0.1:${info.port}`;
+
+    const bridgeInfo = await fetch(`${baseUrl}/api/v1/pairing/info`);
+    await expect(bridgeInfo.json()).resolves.toMatchObject({
+      bridgeId: pairing.bridgeId,
+      bridgeName: 'Codex Remote on studio',
+      pairingEnabled: false,
+    });
+    const closed = await fetch(`${baseUrl}/api/v1/pairing/requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId: 'esp32-a1b2',
+        deviceName: 'Pocket Remote A1B2',
+      }),
+    });
+    expect(closed.status).toBe(403);
+
+    pairing.openPairingWindow();
+    const created = await fetch(`${baseUrl}/api/v1/pairing/requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId: 'esp32-a1b2',
+        deviceName: 'Pocket Remote A1B2',
+      }),
+    });
+    expect(created.status).toBe(201);
+    const request = await created.json() as { requestId: string; code: string };
+    expect(request.code).toMatch(/^\d{6}$/);
+    await pairing.approve(request.requestId);
+
+    const result = await fetch(
+      `${baseUrl}/api/v1/pairing/requests/${request.requestId}?deviceId=esp32-a1b2`,
+    );
+    const approved = await result.json() as { status: string; token: string };
+    expect(approved.status).toBe('approved');
+
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/device`,
+      { headers: { 'X-Codex-Remote-Token': approved.token } },
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+    await expect(messages.nextJson('hello')).resolves.toMatchObject({
+      type: 'hello',
+    });
+  });
 });
 
 describe('CodexRemoteServer realtime voice', () => {

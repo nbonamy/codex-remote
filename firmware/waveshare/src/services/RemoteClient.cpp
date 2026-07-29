@@ -2,17 +2,21 @@
 
 #include "../diag/Log.h"
 #include <ESPmDNS.h>
+#include <HTTPClient.h>
 #include <WiFi.h>
 
 using namespace websockets;
 
 void RemoteClient::begin(RemoteClientListener *listener) {
   _listener = listener;
-  _ws.addHeader("X-Codex-Remote-Token", DEVICE_TOKEN);
-  _ws.onMessage([this](WebsocketsMessage message) { handleMessage(message); });
-  _ws.onEvent([this](WebsocketsEvent event, String data) {
-    handleEvent(event, data);
-  });
+  const uint64_t chipId = ESP.getEfuseMac();
+  char deviceId[24];
+  snprintf(deviceId, sizeof(deviceId), "esp32-%04x%08x",
+           static_cast<unsigned int>(chipId >> 32),
+           static_cast<unsigned int>(chipId));
+  _deviceId = deviceId;
+  _deviceName = "Pocket Remote " + _deviceId.substring(_deviceId.length() - 4);
+  loadPairings();
 
   _status = "Joining Wi-Fi";
   changed();
@@ -30,7 +34,19 @@ void RemoteClient::begin(RemoteClientListener *listener) {
     return;
   }
   MDNS.begin("codex-remote-device");
-  connect();
+  refreshBridges();
+  if (!_selectedBridgeId.isEmpty()) {
+    connect();
+  } else if (strlen(DEVICE_TOKEN) > 0 && _bridgeCount > 0) {
+    _selectedBridgeId = _bridges[0].id;
+    _selectedBridgeName = _bridges[0].name;
+    _currentToken = DEVICE_TOKEN;
+    saveSelectedBridge();
+    connect();
+  } else {
+    _status = "Select a bridge";
+    changed();
+  }
 }
 
 void RemoteClient::update() {
@@ -38,7 +54,14 @@ void RemoteClient::update() {
     _ws.poll();
     return;
   }
-  if (WiFi.status() == WL_CONNECTED &&
+  if (_pairingPending) {
+    if (millis() - _lastPairingPollMs >= 1000) {
+      pollPairing();
+    }
+    return;
+  }
+  if (!_selectingBridge && !_selectedBridgeId.isEmpty() &&
+      WiFi.status() == WL_CONNECTED &&
       millis() - _lastConnectAttemptMs >= RECONNECT_INTERVAL_MS) {
     connect();
   }
@@ -46,14 +69,23 @@ void RemoteClient::update() {
 
 void RemoteClient::connect() {
   _lastConnectAttemptMs = millis();
-  if (!discoverServer()) {
+  if (!resolveSelectedBridge()) {
     _status = "Looking for host";
+    changed();
+    return;
+  }
+  if (_currentToken.isEmpty()) {
+    _currentToken = tokenForBridge(_selectedBridgeId);
+  }
+  if (_currentToken.isEmpty()) {
+    _status = "Pair this bridge";
     changed();
     return;
   }
   _status = "Connecting";
   _error = "";
   changed();
+  configureWebSocket();
   Log::client("Remote", "connecting ws://%s:%d%s", _serverHost.c_str(),
               _serverPort, SERVER_PATH);
   _connected = _ws.connect(_serverHost, _serverPort, SERVER_PATH);
@@ -63,19 +95,347 @@ void RemoteClient::connect() {
   }
 }
 
-bool RemoteClient::discoverServer() {
+void RemoteClient::configureWebSocket() {
+  _ws = WebsocketsClient();
+  _ws.addHeader("X-Codex-Remote-Token", _currentToken);
+  _ws.onMessage([this](WebsocketsMessage message) { handleMessage(message); });
+  _ws.onEvent([this](WebsocketsEvent event, String data) {
+    handleEvent(event, data);
+  });
+}
+
+void RemoteClient::disconnect() {
+  if (_connected) {
+    _ws.close();
+  }
+  _connected = false;
+}
+
+bool RemoteClient::refreshBridges() {
+  _bridgeCount = 0;
   if (strlen(SERVER_HOST) > 0) {
-    _serverHost = SERVER_HOST;
-    _serverPort = SERVER_PORT;
+    RemoteBridge &bridge = _bridges[_bridgeCount++];
+    bridge.id = "configured";
+    bridge.name = "Configured bridge";
+    bridge.host = SERVER_HOST;
+    bridge.port = SERVER_PORT;
+    bridge.paired = strlen(DEVICE_TOKEN) > 0 ||
+                    !tokenForBridge(bridge.id).isEmpty();
+    bridge.selected = bridge.id == _selectedBridgeId;
+    changed();
     return true;
   }
   const int count = MDNS.queryService("codex-remote", "tcp");
-  if (count <= 0) {
+  for (int index = 0; index < count && _bridgeCount < kMaxBridges; index++) {
+    String bridgeId = MDNS.txt(index, "bridgeId");
+    if (bridgeId.isEmpty()) {
+      bridgeId = "legacy-" + MDNS.hostname(index);
+    }
+    bool duplicate = false;
+    for (int existing = 0; existing < _bridgeCount; existing++) {
+      if (_bridges[existing].id == bridgeId) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      continue;
+    }
+    RemoteBridge &bridge = _bridges[_bridgeCount++];
+    bridge.id = bridgeId;
+    bridge.name = MDNS.txt(index, "bridgeName");
+    if (bridge.name.isEmpty()) {
+      bridge.name = MDNS.instanceName(index);
+    }
+    if (bridge.name.isEmpty()) {
+      bridge.name = MDNS.hostname(index);
+    }
+    bridge.host = MDNS.address(index).toString();
+    bridge.port = MDNS.port(index);
+    bridge.paired = !tokenForBridge(bridge.id).isEmpty();
+    bridge.selected = bridge.id == _selectedBridgeId;
+  }
+  changed();
+  return _bridgeCount > 0;
+}
+
+bool RemoteClient::resolveSelectedBridge() {
+  if (_bridgeCount == 0 && !refreshBridges()) {
     return false;
   }
-  _serverHost = MDNS.address(0).toString();
-  _serverPort = MDNS.port(0);
-  return !_serverHost.isEmpty() && _serverPort > 0;
+  for (int index = 0; index < _bridgeCount; index++) {
+    if (_bridges[index].id == _selectedBridgeId) {
+      _serverHost = _bridges[index].host;
+      _serverPort = _bridges[index].port;
+      _selectedBridgeName = _bridges[index].name;
+      return !_serverHost.isEmpty() && _serverPort > 0;
+    }
+  }
+  if (!refreshBridges()) {
+    return false;
+  }
+  for (int index = 0; index < _bridgeCount; index++) {
+    if (_bridges[index].id == _selectedBridgeId) {
+      _serverHost = _bridges[index].host;
+      _serverPort = _bridges[index].port;
+      _selectedBridgeName = _bridges[index].name;
+      return !_serverHost.isEmpty() && _serverPort > 0;
+    }
+  }
+  return false;
+}
+
+void RemoteClient::beginBridgeSelection() {
+  disconnect();
+  _selectingBridge = true;
+  _pairingPending = false;
+  _pairingRequestId = "";
+  _pairingCode = "";
+  _error = "";
+  _status = "Discovering bridges";
+  changed();
+  refreshBridges();
+  _status = _bridgeCount > 0 ? "Choose a bridge" : "No bridges found";
+  changed();
+}
+
+void RemoteClient::cancelBridgeSelection() {
+  _selectingBridge = false;
+  _pairingPending = false;
+  _pairingRequestId = "";
+  _pairingCode = "";
+  if (!_selectedBridgeId.isEmpty()) {
+    connect();
+  } else {
+    _status = "Select a bridge";
+    changed();
+  }
+}
+
+bool RemoteClient::selectBridge(int index) {
+  if (index < 0 || index >= _bridgeCount) {
+    return false;
+  }
+  disconnect();
+  const RemoteBridge &bridge = _bridges[index];
+  _selectedBridgeId = bridge.id;
+  _selectedBridgeName = bridge.name;
+  _serverHost = bridge.host;
+  _serverPort = bridge.port;
+  _currentToken = tokenForBridge(bridge.id);
+  if (_currentToken.isEmpty() && bridge.id == "configured" &&
+      strlen(DEVICE_TOKEN) > 0) {
+    _currentToken = DEVICE_TOKEN;
+  }
+  saveSelectedBridge();
+  for (int item = 0; item < _bridgeCount; item++) {
+    _bridges[item].selected = item == index;
+  }
+  if (!_currentToken.isEmpty()) {
+    _selectingBridge = false;
+    connect();
+    return true;
+  }
+  return startPairing();
+}
+
+bool RemoteClient::startPairing() {
+  HTTPClient http;
+  http.setConnectTimeout(2500);
+  http.setTimeout(3000);
+  if (!http.begin(_serverHost, _serverPort, "/api/v1/pairing/requests")) {
+    _status = "Pairing failed";
+    _error = "Could not contact bridge";
+    changed();
+    return false;
+  }
+  http.addHeader("Content-Type", "application/json");
+  JsonDocument request;
+  request["deviceId"] = _deviceId;
+  request["deviceName"] = _deviceName;
+  String body;
+  serializeJson(request, body);
+  const int statusCode = http.POST(body);
+  const String responseBody = http.getString();
+  http.end();
+
+  JsonDocument response;
+  const DeserializationError parseError =
+      deserializeJson(response, responseBody);
+  if (statusCode != HTTP_CODE_CREATED || parseError) {
+    _status = statusCode == HTTP_CODE_FORBIDDEN
+                  ? "Open pairing on Mac"
+                  : "Pairing failed";
+    _error = parseError ? "Invalid bridge response"
+                        : String(response["error"] | "Try again");
+    changed();
+    return false;
+  }
+  _pairingRequestId = String(response["requestId"] | "");
+  _pairingCode = String(response["code"] | "");
+  if (_pairingRequestId.isEmpty() || _pairingCode.isEmpty()) {
+    _status = "Pairing failed";
+    _error = "Bridge omitted pairing code";
+    changed();
+    return false;
+  }
+  _pairingPending = true;
+  _lastPairingPollMs = millis();
+  _status = "Approve on Mac";
+  _error = "";
+  changed();
+  return true;
+}
+
+void RemoteClient::pollPairing() {
+  _lastPairingPollMs = millis();
+  if (_pairingRequestId.isEmpty()) {
+    _pairingPending = false;
+    return;
+  }
+  HTTPClient http;
+  http.setConnectTimeout(2500);
+  http.setTimeout(3000);
+  const String path = "/api/v1/pairing/requests/" + _pairingRequestId +
+                      "?deviceId=" + _deviceId;
+  if (!http.begin(_serverHost, _serverPort, path)) {
+    return;
+  }
+  const int statusCode = http.GET();
+  const String responseBody = http.getString();
+  http.end();
+  if (statusCode != HTTP_CODE_OK) {
+    return;
+  }
+  JsonDocument response;
+  if (deserializeJson(response, responseBody)) {
+    return;
+  }
+  const String state = response["status"] | "expired";
+  if (state == "pending") {
+    return;
+  }
+  if (state == "approved") {
+    const String token = response["token"] | "";
+    if (token.isEmpty()) {
+      _pairingPending = false;
+      _status = "Pairing failed";
+      _error = "Bridge omitted credential";
+      changed();
+      return;
+    }
+    savePairing(_selectedBridgeId, _selectedBridgeName, token);
+    _currentToken = token;
+    _pairingPending = false;
+    _selectingBridge = false;
+    _pairingRequestId = "";
+    _pairingCode = "";
+    _status = "Pairing complete";
+    changed();
+    connect();
+    return;
+  }
+  _pairingPending = false;
+  _pairingRequestId = "";
+  _pairingCode = "";
+  _status = state == "rejected" ? "Pairing rejected" : "Pairing expired";
+  _error = "Select the bridge to try again";
+  changed();
+}
+
+String RemoteClient::tokenForBridge(const String &bridgeId) const {
+  for (int index = 0; index < _pairingCount; index++) {
+    if (_pairings[index].id == bridgeId) {
+      return _pairings[index].token;
+    }
+  }
+  return "";
+}
+
+void RemoteClient::loadPairings() {
+  Preferences preferences;
+  if (!preferences.begin("codexremote", true)) {
+    return;
+  }
+  _selectedBridgeId = preferences.getString("selected", "");
+  const String serialized = preferences.getString("pairings", "[]");
+  preferences.end();
+
+  JsonDocument document;
+  if (deserializeJson(document, serialized)) {
+    return;
+  }
+  _pairingCount = 0;
+  for (JsonObjectConst item : document.as<JsonArrayConst>()) {
+    if (_pairingCount >= kMaxBridges) {
+      break;
+    }
+    const String id = item["id"] | "";
+    const String token = item["token"] | "";
+    if (id.isEmpty() || token.isEmpty()) {
+      continue;
+    }
+    StoredPairing &pairing = _pairings[_pairingCount++];
+    pairing.id = id;
+    pairing.name = String(item["name"] | "Codex Remote");
+    pairing.token = token;
+    if (id == _selectedBridgeId) {
+      _selectedBridgeName = pairing.name;
+      _currentToken = pairing.token;
+    }
+  }
+}
+
+void RemoteClient::savePairing(const String &bridgeId,
+                               const String &bridgeName,
+                               const String &token) {
+  int target = -1;
+  for (int index = 0; index < _pairingCount; index++) {
+    if (_pairings[index].id == bridgeId) {
+      target = index;
+      break;
+    }
+  }
+  if (target < 0 && _pairingCount < kMaxBridges) {
+    target = _pairingCount++;
+  }
+  if (target < 0) {
+    _error = "Pairing storage is full";
+    return;
+  }
+  _pairings[target].id = bridgeId;
+  _pairings[target].name = bridgeName;
+  _pairings[target].token = token;
+  for (int index = 0; index < _bridgeCount; index++) {
+    if (_bridges[index].id == bridgeId) {
+      _bridges[index].paired = true;
+    }
+  }
+
+  JsonDocument document;
+  JsonArray pairings = document.to<JsonArray>();
+  for (int index = 0; index < _pairingCount; index++) {
+    JsonObject pairing = pairings.add<JsonObject>();
+    pairing["id"] = _pairings[index].id;
+    pairing["name"] = _pairings[index].name;
+    pairing["token"] = _pairings[index].token;
+  }
+  String serialized;
+  serializeJson(document, serialized);
+  Preferences preferences;
+  if (preferences.begin("codexremote", false)) {
+    preferences.putString("pairings", serialized);
+    preferences.putString("selected", _selectedBridgeId);
+    preferences.end();
+  }
+}
+
+void RemoteClient::saveSelectedBridge() {
+  Preferences preferences;
+  if (preferences.begin("codexremote", false)) {
+    preferences.putString("selected", _selectedBridgeId);
+    preferences.end();
+  }
 }
 
 bool RemoteClient::createThread() {

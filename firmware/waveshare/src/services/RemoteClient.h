@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <ArduinoWebsockets.h>
+#include <Preferences.h>
 
 struct RemoteThread {
   String id;
@@ -19,6 +20,15 @@ struct RemoteMessage {
   String status;
 };
 
+struct RemoteBridge {
+  String id;
+  String name;
+  String host;
+  int port;
+  bool paired;
+  bool selected;
+};
+
 class RemoteClientListener {
 public:
   virtual ~RemoteClientListener() = default;
@@ -30,6 +40,7 @@ class RemoteClient {
 public:
   static constexpr int kMaxThreads = 12;
   static constexpr int kMaxMessages = 14;
+  static constexpr int kMaxBridges = 8;
 
   void begin(RemoteClientListener *listener);
   void update();
@@ -42,8 +53,13 @@ public:
   bool activeThreadBusy() const { return _activeThreadBusy; }
   int threadCount() const { return _threadCount; }
   int messageCount() const { return _messageCount; }
+  int bridgeCount() const { return _bridgeCount; }
   const RemoteThread &thread(int index) const { return _threads[index]; }
   const RemoteMessage &message(int index) const { return _messages[index]; }
+  const RemoteBridge &bridge(int index) const { return _bridges[index]; }
+  bool pairingPending() const { return _pairingPending; }
+  const String &pairingCode() const { return _pairingCode; }
+  const String &selectedBridgeName() const { return _selectedBridgeName; }
 
   bool createThread();
   bool openThread(const String &threadId);
@@ -53,26 +69,59 @@ public:
   bool endAudio();
   bool interrupt(const String &threadId);
   void clearActiveThread();
+  void beginBridgeSelection();
+  void cancelBridgeSelection();
+  bool refreshBridges();
+  bool selectBridge(int index);
 
 private:
+  struct StoredPairing {
+    String id;
+    String name;
+    String token;
+  };
+
   websockets::WebsocketsClient _ws;
   RemoteClientListener *_listener = nullptr;
   RemoteThread _threads[kMaxThreads];
   RemoteMessage _messages[kMaxMessages];
+  RemoteBridge _bridges[kMaxBridges];
+  StoredPairing _pairings[kMaxBridges];
   int _threadCount = 0;
   int _messageCount = 0;
+  int _bridgeCount = 0;
+  int _pairingCount = 0;
   bool _connected = false;
+  bool _selectingBridge = false;
+  bool _pairingPending = false;
   bool _activeThreadBusy = false;
   String _activeThreadId;
   String _activeThreadTitle;
   String _status = "Offline";
   String _error;
+  String _deviceId;
+  String _deviceName;
+  String _selectedBridgeId;
+  String _selectedBridgeName;
+  String _currentToken;
+  String _pairingRequestId;
+  String _pairingCode;
   String _serverHost;
   int _serverPort = SERVER_PORT;
   unsigned long _lastConnectAttemptMs = 0;
+  unsigned long _lastPairingPollMs = 0;
 
   void connect();
-  bool discoverServer();
+  void configureWebSocket();
+  void disconnect();
+  bool resolveSelectedBridge();
+  bool startPairing();
+  void pollPairing();
+  String tokenForBridge(const String &bridgeId) const;
+  void loadPairings();
+  void savePairing(const String &bridgeId, const String &bridgeName,
+                   const String &token);
+  void saveSelectedBridge();
   bool sendControl(JsonDocument &document);
   void handleMessage(websockets::WebsocketsMessage message);
   void handleEvent(websockets::WebsocketsEvent event, const String &data);
