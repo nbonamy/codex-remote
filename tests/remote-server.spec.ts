@@ -1,0 +1,353 @@
+import type {
+  CodexConversation,
+  CodexRealtimeSession,
+  CodexSurface,
+} from 'codex-app-sdk/node';
+import type {
+  CodexRealtimeEvent,
+  CodexSurfaceSnapshot,
+} from 'codex-app-sdk/surface';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { WebSocket } from 'ws';
+import {
+  CodexRemoteServer,
+  type RemoteServerInfo,
+} from '../src/server/remote-server';
+import type {
+  RemoteRealtimeBridge,
+  RemoteRealtimePeer,
+} from '../src/server/realtime-media';
+
+const servers: CodexRemoteServer[] = [];
+const sockets: WebSocket[] = [];
+
+afterEach(async () => {
+  for (const socket of sockets.splice(0)) socket.close();
+  await Promise.all(servers.splice(0).map((server) => server.close()));
+});
+
+describe('CodexRemoteServer realtime voice', () => {
+  it('bridges device PCM through WebRTC and streams transcript and audio back', async () => {
+    const realtime = new FakeRealtimeSession(
+      'thread-1',
+      'webrtc',
+      'v=0\r\no=answer\r\n',
+    );
+    const media = new FakeRealtimeBridge();
+    const conversation = fakeConversation(realtime);
+    const startRealtime = vi.spyOn(conversation, 'startRealtime');
+    const surface = fakeSurface(conversation);
+    const server = new CodexRemoteServer({
+      surface,
+      token: 'test-device-token',
+      defaultCwd: '/tmp/project',
+      simulatorHtml: '<!doctype html><title>sim</title>',
+      port: 0,
+      advertise: false,
+      realtimeBridge: media,
+    });
+    servers.push(server);
+    const info = await server.start();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/device?token=test-device-token`,
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+
+    await messages.nextJson('hello');
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({
+      type: 'audio_start',
+      threadId: 'thread-1',
+      sampleRate: 24_000,
+    }));
+    socket.send(Buffer.alloc(4_800, 1));
+    socket.send(JSON.stringify({ type: 'audio_end' }));
+    await messages.nextJson('status');
+
+    await vi.waitFor(() => expect(media.peer.appendAudio).toHaveBeenCalledTimes(2));
+    expect(startRealtime).toHaveBeenCalledWith({
+      outputModality: 'audio',
+      version: 'v1',
+      includeStartupContext: true,
+      flushTranscriptTailOnSessionEnd: true,
+      transport: {
+        type: 'webrtc',
+        sdp: 'v=0\r\no=offer\r\n',
+      },
+    });
+    expect(media.peer.applyAnswer).toHaveBeenCalledWith('v=0\r\no=answer\r\n');
+    expect(media.peer.appendAudio.mock.calls[0]?.[0]).toHaveLength(4_800);
+    expect(media.peer.appendAudio.mock.calls[0]?.[1]).toBe(24_000);
+    expect(media.peer.appendAudio.mock.calls[1]?.[0]).toHaveLength(33_600);
+    expect(media.peer.appendAudio.mock.calls[1]?.[1]).toBe(24_000);
+
+    realtime.emit(realtimeEvent('realtime.transcriptCompleted', {
+      role: 'user',
+      text: 'run the focused tests',
+    }));
+    expect(await messages.nextJson('transcript')).toMatchObject({
+      role: 'user',
+      text: 'run the focused tests',
+    });
+
+    media.emitAudio(new Uint8Array([1, 2, 3, 4]));
+    expect(await messages.nextBinary()).toStrictEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
+  it('rejects unauthorized device websocket upgrades', async () => {
+    const realtime = new FakeRealtimeSession('thread-1');
+    const server = new CodexRemoteServer({
+      surface: fakeSurface(fakeConversation(realtime)),
+      token: 'correct-token',
+      defaultCwd: '/tmp/project',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+    });
+    servers.push(server);
+    const info: RemoteServerInfo = await server.start();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/device?token=wrong-token`,
+    );
+    sockets.push(socket);
+    await expect(new Promise<void>((resolve, reject) => {
+      socket.once('open', resolve);
+      socket.once('error', reject);
+    })).rejects.toThrow('Unexpected server response: 401');
+  });
+
+  it('falls back to local transcription when Codex realtime is not entitled', async () => {
+    const realtime = new FakeRealtimeSession('thread-1');
+    const conversation = fakeConversation(realtime);
+    vi.mocked(conversation.startRealtime).mockRejectedValueOnce(
+      new Error('Voice session access denied'),
+    );
+    const transcribeAudio = vi.fn(async (_wave: Buffer) => ({ text: 'run the focused tests' }));
+    const server = new CodexRemoteServer({
+      surface: fakeSurface(conversation),
+      token: 'test-device-token',
+      defaultCwd: '/tmp/project',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+      realtimeBridge: new FakeRealtimeBridge(),
+      transcribeAudio,
+    });
+    servers.push(server);
+    const info = await server.start();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/device?token=test-device-token`,
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+
+    await messages.nextJson('hello');
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({
+      type: 'audio_start',
+      threadId: 'thread-1',
+      sampleRate: 24_000,
+    }));
+    socket.send(Buffer.alloc(4_800, 1));
+    socket.send(JSON.stringify({ type: 'audio_end' }));
+
+    await vi.waitFor(() => expect(transcribeAudio).toHaveBeenCalledTimes(1));
+    expect(await messages.nextJson('transcript')).toMatchObject({
+      role: 'user',
+      text: 'run the focused tests',
+    });
+    expect(transcribeAudio).toHaveBeenCalledTimes(1);
+    const wave = transcribeAudio.mock.calls[0]?.[0];
+    expect(wave?.subarray(0, 4).toString('ascii')).toBe('RIFF');
+    expect(wave?.subarray(8, 12).toString('ascii')).toBe('WAVE');
+    expect(wave).toHaveLength(4_844);
+    expect(conversation.sendMessage).toHaveBeenCalledWith('run the focused tests');
+  });
+});
+
+class FakeRealtimeSession implements CodexRealtimeSession {
+  readonly appendAudio = vi.fn<CodexRealtimeSession['appendAudio']>(async () => undefined);
+  readonly appendText = vi.fn<CodexRealtimeSession['appendText']>(async () => undefined);
+  readonly appendSpeech = vi.fn<CodexRealtimeSession['appendSpeech']>(async () => undefined);
+  readonly stop = vi.fn<CodexRealtimeSession['stop']>(async () => undefined);
+  private readonly listeners = new Set<(event: CodexRealtimeEvent) => void>();
+
+  constructor(
+    readonly conversationId: string,
+    readonly transport: 'websocket' | 'webrtc' = 'websocket',
+    readonly remoteSdp: string | null = null,
+  ) {}
+
+  onEvent(listener: (event: CodexRealtimeEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  emit(event: CodexRealtimeEvent): void {
+    for (const listener of this.listeners) listener(event);
+  }
+}
+
+class FakeRealtimePeer implements RemoteRealtimePeer {
+  readonly offerSdp = 'v=0\r\no=offer\r\n';
+  readonly applyAnswer = vi.fn<RemoteRealtimePeer['applyAnswer']>(async () => undefined);
+  readonly appendAudio = vi.fn<RemoteRealtimePeer['appendAudio']>(async () => undefined);
+  readonly close = vi.fn<RemoteRealtimePeer['close']>(async () => undefined);
+}
+
+class FakeRealtimeBridge implements RemoteRealtimeBridge {
+  readonly peer = new FakeRealtimePeer();
+  private onAudio: ((data: Uint8Array) => void) | null = null;
+
+  readonly createPeer = vi.fn<RemoteRealtimeBridge['createPeer']>(async (onAudio) => {
+    this.onAudio = onAudio;
+    return this.peer;
+  });
+
+  emitAudio(data: Uint8Array): void {
+    this.onAudio?.(data);
+  }
+}
+
+class SocketMessages {
+  private readonly queued: Array<{ data: Buffer; binary: boolean }> = [];
+  private readonly waiting: Array<(message: { data: Buffer; binary: boolean }) => void> = [];
+
+  constructor(socket: WebSocket) {
+    socket.on('message', (data, binary) => {
+      const message = { data: Buffer.from(data as Buffer), binary };
+      const resolve = this.waiting.shift();
+      if (resolve) resolve(message);
+      else this.queued.push(message);
+    });
+  }
+
+  async nextJson(type: string): Promise<Record<string, unknown>> {
+    while (true) {
+      const message = await this.next();
+      if (message.binary) continue;
+      const json = JSON.parse(message.data.toString('utf8')) as Record<string, unknown>;
+      if (json.type === type) return json;
+    }
+  }
+
+  async nextBinary(): Promise<Buffer> {
+    while (true) {
+      const message = await this.next();
+      if (message.binary) return message.data;
+    }
+  }
+
+  private next(): Promise<{ data: Buffer; binary: boolean }> {
+    const queued = this.queued.shift();
+    if (queued) return Promise.resolve(queued);
+    return new Promise((resolve) => this.waiting.push(resolve));
+  }
+}
+
+function fakeConversation(realtime: CodexRealtimeSession): CodexConversation {
+  const snapshot = conversationSnapshot();
+  return {
+    id: 'thread-1',
+    load: vi.fn(async () => snapshot),
+    select: vi.fn(async () => snapshot),
+    readHistory: vi.fn(async () => ({
+      conversationId: 'thread-1',
+      messages: [],
+      threadStatus: { type: 'idle' as const },
+    })),
+    rename: vi.fn(async () => snapshot),
+    updateSettings: vi.fn(async () => snapshot),
+    sendMessage: vi.fn(async () => snapshot),
+    startRealtime: vi.fn(async () => realtime),
+    compact: vi.fn(async () => snapshot),
+    startReview: vi.fn(async () => snapshot),
+    steerMessage: vi.fn(async () => snapshot),
+    interrupt: vi.fn(async () => snapshot),
+    deleteMessage: vi.fn(async () => snapshot),
+    editMessage: vi.fn(async () => snapshot),
+    retryMessage: vi.fn(async () => snapshot),
+    rollbackToTurn: vi.fn(async () => snapshot),
+    deleteQueuedPrompt: vi.fn(async () => snapshot),
+    steerQueuedPrompt: vi.fn(async () => snapshot),
+    respondToClientRequest: vi.fn(async () => snapshot),
+    resolveApproval: vi.fn(async () => snapshot),
+    setGoal: vi.fn(async () => snapshot),
+    clearGoal: vi.fn(async () => snapshot),
+    getSnapshot: vi.fn(() => snapshot),
+    onStateChange: vi.fn(() => () => undefined),
+    onEvent: vi.fn(() => () => undefined),
+  };
+}
+
+function fakeSurface(conversation: CodexConversation): CodexSurface {
+  const snapshot = conversationSnapshot();
+  return {
+    onStateChange: vi.fn(() => () => undefined),
+    onEvent: vi.fn(() => () => undefined),
+    getSnapshot: vi.fn(() => snapshot),
+    listConversations: vi.fn(async () => []),
+    conversation: vi.fn(() => conversation),
+  } as unknown as CodexSurface;
+}
+
+function conversationSnapshot(): CodexSurfaceSnapshot & {
+  activeConversationId: string;
+  activeTurnId: null;
+  turnIds: string[];
+} {
+  return {
+    status: 'ready',
+    authentication: {
+      status: 'loaded',
+      account: { type: 'chatgpt', email: 'test@example.test', planType: 'pro' },
+      requiresOpenaiAuth: true,
+      error: null,
+      login: { status: 'idle', loginId: null, authUrl: null, error: null },
+    },
+    models: [],
+    modelCatalogStatus: 'loaded',
+    skills: [],
+    skillCatalogStatus: 'loaded',
+    plugins: [],
+    pluginCatalogStatus: 'loaded',
+    permissionProfiles: [],
+    approvalPresets: [],
+    approvals: [],
+    clientRequests: [],
+    answeredClientRequestIds: [],
+    conversations: [],
+    activeConversationId: 'thread-1',
+    selectedModelId: null,
+    selectedReasoningEffort: null,
+    approvalPreset: null,
+    planMode: false,
+    messages: [],
+    contextUsage: null,
+    goal: null,
+    turnGitDiff: null,
+    threadStatus: { type: 'idle' },
+    rateLimits: null,
+    queuedPrompts: [],
+    busy: false,
+    historyLoading: false,
+    error: null,
+    activeTurnId: null,
+    turnIds: [],
+  };
+}
+
+function realtimeEvent<Type extends CodexRealtimeEvent['type']>(
+  type: Type,
+  payload: Extract<CodexRealtimeEvent, { type: Type }>['payload'],
+): Extract<CodexRealtimeEvent, { type: Type }> {
+  return {
+    type,
+    payload,
+    conversationId: 'thread-1',
+    seq: 1,
+    occurredAt: new Date(0).toISOString(),
+    origin: 'notification',
+  } as Extract<CodexRealtimeEvent, { type: Type }>;
+}

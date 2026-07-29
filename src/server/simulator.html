@@ -1,0 +1,786 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>Codex Remote · Device simulator</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --black: #050607;
+        --panel: #0c0f11;
+        --panel-hi: #14191c;
+        --line: #293034;
+        --white: #f4f1e9;
+        --muted: #8d979c;
+        --mint: #84f5c2;
+        --cyan: #62d7ff;
+        --coral: #ff6b57;
+        --yellow: #ffd166;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+        margin: 0;
+        overflow: hidden;
+        background: #020303;
+        color: var(--white);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+      }
+
+      #device {
+        position: relative;
+        width: 368px;
+        height: 448px;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 80% 8%, rgba(98, 215, 255, 0.08), transparent 30%),
+          var(--black);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 54px;
+        padding: 0 17px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(5, 6, 7, 0.88);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 14px;
+        font-weight: 780;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .mark {
+        display: grid;
+        width: 25px;
+        height: 25px;
+        place-items: center;
+        border: 1px solid #3d494f;
+        border-radius: 8px;
+        color: var(--mint);
+        font: 800 14px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        box-shadow: inset 0 0 14px rgba(132, 245, 194, 0.08);
+      }
+
+      .connection {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 720;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .connection-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--coral);
+        box-shadow: 0 0 0 3px rgba(255, 107, 87, 0.1);
+      }
+
+      .connection.online .connection-dot {
+        background: var(--mint);
+        box-shadow: 0 0 0 3px rgba(132, 245, 194, 0.1);
+      }
+
+      .screen {
+        height: 338px;
+        padding: 15px 15px 10px;
+        overflow: hidden;
+      }
+
+      .eyebrow {
+        margin: 0 0 10px 2px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .thread-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .thread-card {
+        display: grid;
+        grid-template-columns: 25px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        min-height: 54px;
+        padding: 8px 10px;
+        overflow: hidden;
+        border: 1px solid transparent;
+        border-radius: 12px;
+        background: var(--panel);
+      }
+
+      .thread-card.selected {
+        border-color: rgba(132, 245, 194, 0.66);
+        background:
+          linear-gradient(90deg, rgba(132, 245, 194, 0.11), transparent 70%),
+          var(--panel-hi);
+        box-shadow: 0 0 0 1px rgba(132, 245, 194, 0.08);
+      }
+
+      .thread-icon {
+        color: var(--muted);
+        font: 700 17px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      .selected .thread-icon {
+        color: var(--mint);
+      }
+
+      .thread-copy {
+        min-width: 0;
+      }
+
+      .thread-title,
+      .thread-preview {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .thread-title {
+        margin-bottom: 3px;
+        font-size: 13px;
+        font-weight: 720;
+      }
+
+      .thread-preview {
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .thread-age {
+        align-self: start;
+        padding-top: 2px;
+        color: #657077;
+        font-size: 9px;
+      }
+
+      .conversation {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+
+      .conversation-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 0 1px 11px;
+      }
+
+      .conversation-title h1 {
+        margin: 0;
+        overflow: hidden;
+        font-size: 17px;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .activity {
+        flex: none;
+        padding: 4px 7px;
+        border: 1px solid #2d363a;
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 760;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .activity.busy {
+        border-color: rgba(255, 209, 102, 0.35);
+        color: var(--yellow);
+      }
+
+      .messages {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 9px;
+        overflow: auto;
+        padding: 2px 1px 8px;
+        scrollbar-width: none;
+      }
+
+      .messages::-webkit-scrollbar {
+        display: none;
+      }
+
+      .message {
+        max-width: 91%;
+        padding: 9px 11px;
+        border: 1px solid #20272a;
+        border-radius: 12px 12px 12px 3px;
+        background: var(--panel);
+        color: #d9dcda;
+        font-size: 11px;
+        line-height: 1.38;
+        white-space: pre-wrap;
+      }
+
+      .message.user {
+        align-self: flex-end;
+        border-color: rgba(98, 215, 255, 0.22);
+        border-radius: 12px 12px 3px 12px;
+        background: rgba(98, 215, 255, 0.09);
+        color: #e9f7fb;
+      }
+
+      .message.streaming::after {
+        display: inline-block;
+        width: 5px;
+        height: 12px;
+        margin-left: 4px;
+        background: var(--mint);
+        content: "";
+        vertical-align: -2px;
+        animation: blink 0.9s steps(1) infinite;
+      }
+
+      .empty {
+        display: grid;
+        flex: 1;
+        place-items: center;
+        padding: 28px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+        text-align: center;
+      }
+
+      .controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        height: 56px;
+        border-top: 1px solid var(--line);
+        background: #080a0b;
+      }
+
+      .control {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 9px;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 10px;
+        font-weight: 760;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        touch-action: none;
+      }
+
+      .control + .control {
+        border-left: 1px solid var(--line);
+      }
+
+      .key {
+        display: grid;
+        width: 26px;
+        height: 26px;
+        place-items: center;
+        border: 1px solid #3c464b;
+        border-radius: 999px;
+        color: var(--white);
+        font-size: 11px;
+      }
+
+      .control.primary .key {
+        border-color: rgba(132, 245, 194, 0.5);
+        color: var(--mint);
+      }
+
+      .recording {
+        position: absolute;
+        inset: 54px 0 56px;
+        display: none;
+        place-items: center;
+        background:
+          radial-gradient(circle at center, rgba(255, 107, 87, 0.16), transparent 55%),
+          rgba(5, 6, 7, 0.94);
+        backdrop-filter: blur(8px);
+      }
+
+      .recording.visible {
+        display: grid;
+      }
+
+      .recording-inner {
+        display: grid;
+        justify-items: center;
+        gap: 17px;
+      }
+
+      .record-dot {
+        width: 88px;
+        height: 88px;
+        border: 2px solid rgba(255, 107, 87, 0.5);
+        border-radius: 999px;
+        background: var(--coral);
+        box-shadow:
+          0 0 0 14px rgba(255, 107, 87, 0.08),
+          0 0 55px rgba(255, 107, 87, 0.25);
+        animation: breathe 1.25s ease-in-out infinite;
+      }
+
+      .record-label {
+        font-size: 18px;
+        font-weight: 780;
+      }
+
+      .record-hint {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .toast {
+        position: absolute;
+        right: 14px;
+        bottom: 68px;
+        left: 14px;
+        display: none;
+        padding: 10px 12px;
+        border: 1px solid rgba(255, 107, 87, 0.38);
+        border-radius: 10px;
+        background: #23110f;
+        color: #ffd9d3;
+        font-size: 10px;
+        line-height: 1.35;
+      }
+
+      .toast.visible {
+        display: block;
+      }
+
+      @keyframes blink {
+        50% { opacity: 0; }
+      }
+
+      @keyframes breathe {
+        50% { transform: scale(0.92); opacity: 0.84; }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="device">
+      <header class="topbar">
+        <div class="brand">
+          <span class="mark">&gt;_</span>
+          <span>Codex Remote</span>
+        </div>
+        <div class="connection" id="connection">
+          <span class="connection-dot"></span>
+          <span id="connection-label">Offline</span>
+        </div>
+      </header>
+      <section class="screen" id="screen"></section>
+      <footer class="controls">
+        <button class="control primary" id="button-a" type="button">
+          <span class="key">A</span>
+          <span id="button-a-label">Open</span>
+        </button>
+        <button class="control" id="button-b" type="button">
+          <span class="key">B</span>
+          <span id="button-b-label">Next</span>
+        </button>
+      </footer>
+      <div class="recording" id="recording">
+        <div class="recording-inner">
+          <div class="record-dot"></div>
+          <div class="record-label">Listening</div>
+          <div class="record-hint">Release A to send</div>
+        </div>
+      </div>
+      <div class="toast" id="toast"></div>
+    </main>
+    <script>
+      const token = new URLSearchParams(location.search).get("token") || "";
+      const socketProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+      const socketUrl = `${socketProtocol}//${location.host}/api/v1/device?token=${encodeURIComponent(token)}`;
+      const state = {
+        connected: false,
+        view: "threads",
+        threads: [],
+        selected: 0,
+        thread: null,
+        status: "ready",
+        recording: false,
+        transcription: "unavailable",
+      };
+
+      const screen = document.getElementById("screen");
+      const connection = document.getElementById("connection");
+      const connectionLabel = document.getElementById("connection-label");
+      const buttonA = document.getElementById("button-a");
+      const buttonB = document.getElementById("button-b");
+      const buttonALabel = document.getElementById("button-a-label");
+      const buttonBLabel = document.getElementById("button-b-label");
+      const recordingOverlay = document.getElementById("recording");
+      const toast = document.getElementById("toast");
+      let toastTimer = 0;
+      let socket;
+      let mediaStream;
+      let audioContext;
+      let audioSource;
+      let audioProcessor;
+      let playbackContext;
+      let playbackCursor = 0;
+
+      function connect() {
+        if (!token) {
+          showToast("Missing simulator token. Open this page from the Electron app.");
+          return;
+        }
+        socket = new WebSocket(socketUrl);
+        socket.binaryType = "arraybuffer";
+        socket.addEventListener("open", () => {
+          state.connected = true;
+          connection.classList.add("online");
+          connectionLabel.textContent = "Online";
+          send({ type: "hello", device: "html-simulator" });
+          render();
+        });
+        socket.addEventListener("close", () => {
+          state.connected = false;
+          connection.classList.remove("online");
+          connectionLabel.textContent = "Retrying";
+          render();
+          window.setTimeout(connect, 1500);
+        });
+        socket.addEventListener("message", (event) => {
+          if (typeof event.data !== "string") {
+            void playOutputPcm(event.data);
+            return;
+          }
+          const message = JSON.parse(event.data);
+          if (message.type === "hello") {
+            state.transcription = message.transcription;
+          } else if (message.type === "threads") {
+            state.threads = message.threads;
+            state.selected = Math.min(state.selected, state.threads.length);
+          } else if (message.type === "thread") {
+            state.thread = message.thread;
+            state.view = "thread";
+          } else if (message.type === "status") {
+            state.status = message.status;
+          } else if (message.type === "transcript") {
+            showToast(
+              message.role === "user"
+                ? `Heard: ${message.text}`
+                : `Codex: ${message.text}`,
+              4000,
+            );
+          } else if (message.type === "error") {
+            showToast(message.message, 5000);
+            state.status = "ready";
+          }
+          render();
+        });
+      }
+
+      function send(message) {
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify(message));
+        }
+      }
+
+      function render() {
+        connection.classList.toggle("online", state.connected);
+        if (state.view === "threads") {
+          renderThreads();
+          buttonALabel.textContent = "Open";
+          buttonBLabel.textContent = "Next";
+        } else {
+          renderConversation();
+          buttonALabel.textContent = state.recording ? "Release" : "Hold to talk";
+          buttonBLabel.textContent = "Back";
+        }
+        recordingOverlay.classList.toggle("visible", state.recording);
+      }
+
+      function renderThreads() {
+        const entries = [
+          {
+            id: "__new__",
+            title: "New thread",
+            preview: "Start a command in the default workspace",
+            updatedAt: "",
+          },
+          ...state.threads,
+        ];
+        screen.innerHTML = `
+          <p class="eyebrow">${state.threads.length} recent threads</p>
+          <div class="thread-list">
+            ${entries.slice(pageStart(entries.length), pageStart(entries.length) + 4).map((thread, visibleIndex) => {
+              const index = pageStart(entries.length) + visibleIndex;
+              return `
+                <article class="thread-card ${index === state.selected ? "selected" : ""}" data-thread-index="${index}">
+                  <span class="thread-icon">${thread.id === "__new__" ? "+" : "›"}</span>
+                  <div class="thread-copy">
+                    <div class="thread-title">${escapeHtml(thread.title || "Untitled")}</div>
+                    <div class="thread-preview">${escapeHtml(thread.preview || "No messages yet")}</div>
+                  </div>
+                  <span class="thread-age">${relativeAge(thread.updatedAt)}</span>
+                </article>
+              `;
+            }).join("")}
+          </div>
+        `;
+        screen.querySelectorAll("[data-thread-index]").forEach((element) => {
+          element.addEventListener("click", () => {
+            state.selected = Number(element.dataset.threadIndex);
+            openSelectedThread();
+          });
+        });
+      }
+
+      function pageStart(count) {
+        if (count <= 4) return 0;
+        return Math.min(Math.max(0, state.selected - 2), count - 4);
+      }
+
+      function renderConversation() {
+        const thread = state.thread;
+        if (!thread) {
+          screen.innerHTML = '<div class="empty">Loading thread…</div>';
+          return;
+        }
+        const messages = thread.messages || [];
+        screen.innerHTML = `
+          <div class="conversation">
+            <div class="conversation-title">
+              <h1>${escapeHtml(thread.title)}</h1>
+              <span class="activity ${thread.busy ? "busy" : ""}">${thread.busy ? "Working" : "Ready"}</span>
+            </div>
+            <div class="messages" id="messages">
+              ${messages.length ? messages.map((message) => `
+                <div class="message ${message.role} ${message.status === "streaming" ? "streaming" : ""}">
+                  ${escapeHtml(message.text)}
+                </div>
+              `).join("") : '<div class="empty">Hold A and tell Codex what to do.</div>'}
+            </div>
+          </div>
+        `;
+        const messagesElement = document.getElementById("messages");
+        if (messagesElement) messagesElement.scrollTop = messagesElement.scrollHeight;
+      }
+
+      function nextThread() {
+        if (state.view !== "threads") {
+          state.view = "threads";
+          send({ type: "list_threads" });
+          render();
+          return;
+        }
+        state.selected = (state.selected + 1) % (state.threads.length + 1);
+        render();
+      }
+
+      function openSelectedThread() {
+        if (state.view !== "threads") return;
+        if (state.selected === 0) {
+          send({ type: "create_thread" });
+          return;
+        }
+        const thread = state.threads[state.selected - 1];
+        if (thread) send({ type: "open_thread", threadId: thread.id });
+      }
+
+      async function startTalk() {
+        if (state.view !== "thread" || state.recording || !state.thread) return;
+        if (state.transcription !== "available") {
+          showToast("Speech transcription is unavailable on this desktop.");
+          return;
+        }
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+          });
+          audioContext = new AudioContext();
+          audioSource = audioContext.createMediaStreamSource(mediaStream);
+          audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+          audioProcessor.onaudioprocess = (event) => {
+            if (!state.recording || socket?.readyState !== WebSocket.OPEN) return;
+            const pcm = downsampleToPcm16(
+              event.inputBuffer.getChannelData(0),
+              audioContext.sampleRate,
+              24000,
+            );
+            socket.send(pcm.buffer);
+          };
+          audioSource.connect(audioProcessor);
+          audioProcessor.connect(audioContext.destination);
+          state.recording = true;
+          send({
+            type: "audio_start",
+            threadId: state.thread.id,
+            sampleRate: 24000,
+          });
+          render();
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      function stopTalk() {
+        if (!state.recording) return;
+        state.recording = false;
+        audioProcessor?.disconnect();
+        audioSource?.disconnect();
+        mediaStream?.getTracks().forEach((track) => track.stop());
+        void audioContext?.close();
+        mediaStream = null;
+        audioContext = null;
+        audioSource = null;
+        audioProcessor = null;
+        send({ type: "audio_end" });
+        render();
+      }
+
+      function downsampleToPcm16(input, inputRate, outputRate) {
+        const ratio = inputRate / outputRate;
+        const outputLength = Math.max(1, Math.floor(input.length / ratio));
+        const output = new Int16Array(outputLength);
+        for (let outputIndex = 0; outputIndex < outputLength; outputIndex += 1) {
+          const start = Math.floor(outputIndex * ratio);
+          const end = Math.min(input.length, Math.floor((outputIndex + 1) * ratio));
+          let sum = 0;
+          for (let inputIndex = start; inputIndex < end; inputIndex += 1) {
+            sum += input[inputIndex];
+          }
+          const sample = Math.max(-1, Math.min(1, sum / Math.max(1, end - start)));
+          output[outputIndex] = sample < 0 ? sample * 32768 : sample * 32767;
+        }
+        return output;
+      }
+
+      async function playOutputPcm(data) {
+        const bytes = data instanceof ArrayBuffer ? data : await data.arrayBuffer();
+        if (bytes.byteLength < 2) return;
+        playbackContext ||= new AudioContext();
+        if (playbackContext.state === "suspended") await playbackContext.resume();
+        const input = new DataView(bytes);
+        const samples = Math.floor(bytes.byteLength / 2);
+        const buffer = playbackContext.createBuffer(1, samples, 24000);
+        const output = buffer.getChannelData(0);
+        for (let index = 0; index < samples; index += 1) {
+          output[index] = input.getInt16(index * 2, true) / 32768;
+        }
+        const source = playbackContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(playbackContext.destination);
+        const startsAt = Math.max(playbackContext.currentTime + 0.02, playbackCursor);
+        source.start(startsAt);
+        playbackCursor = startsAt + buffer.duration;
+      }
+
+      function showToast(message, duration = 3000) {
+        toast.textContent = message;
+        toast.classList.add("visible");
+        window.clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(() => toast.classList.remove("visible"), duration);
+      }
+
+      function relativeAge(value) {
+        if (!value) return "";
+        const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+        if (seconds < 60) return "now";
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+        if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+        return `${Math.floor(seconds / 86400)}d`;
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+      }
+
+      buttonA.addEventListener("click", () => {
+        if (state.view === "threads") openSelectedThread();
+      });
+      buttonA.addEventListener("pointerdown", (event) => {
+        if (state.view !== "thread") return;
+        event.preventDefault();
+        buttonA.setPointerCapture(event.pointerId);
+        void startTalk();
+      });
+      buttonA.addEventListener("pointerup", (event) => {
+        if (state.view !== "thread") return;
+        event.preventDefault();
+        stopTalk();
+      });
+      buttonA.addEventListener("pointercancel", stopTalk);
+      buttonB.addEventListener("click", nextThread);
+
+      document.addEventListener("keydown", (event) => {
+        if (event.repeat) return;
+        if (event.code === "ArrowDown" || event.code === "ArrowRight") {
+          event.preventDefault();
+          nextThread();
+        } else if (event.code === "Enter" && state.view === "threads") {
+          event.preventDefault();
+          openSelectedThread();
+        } else if (event.code === "Escape" && state.view === "thread") {
+          event.preventDefault();
+          nextThread();
+        } else if (event.code === "Space" && state.view === "thread") {
+          event.preventDefault();
+          void startTalk();
+        }
+      });
+      document.addEventListener("keyup", (event) => {
+        if (event.code === "Space") {
+          event.preventDefault();
+          stopTalk();
+        }
+      });
+
+      render();
+      connect();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+node_modules/
+dist-main/
+dist-renderer/
+release/
+coverage/
+.DS_Store
+*.log
+
+firmware/waveshare/.pio/
+firmware/waveshare/src/credentials.h
