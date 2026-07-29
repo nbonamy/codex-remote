@@ -11,7 +11,6 @@ import type {
   CodexSurface,
 } from 'codex-app-sdk/node';
 import type {
-  CodexConversationHistory,
   CodexRealtimeEvent,
   CodexSurfaceSnapshot,
 } from 'codex-app-sdk/surface';
@@ -751,30 +750,13 @@ export class CodexRemoteServer {
 }
 
 async function ensureConversationLoaded(conversation: CodexConversation): Promise<void> {
-  try {
-    conversation.getSnapshot();
-  } catch {
-    await conversation.readHistory();
-  }
+  await conversation.load();
 }
 
 async function loadConversationSnapshot(
   conversation: CodexConversation,
 ): Promise<CodexSurfaceSnapshot> {
-  let history: CodexConversationHistory | null = null;
-  try {
-    return conversation.getSnapshot();
-  } catch {
-    history = await conversation.readHistory();
-  }
-  const snapshot = conversation.getSnapshot();
-  return history
-    ? { ...snapshot, messages: toSurfaceMessages(history) }
-    : snapshot;
-}
-
-function toSurfaceMessages(history: CodexConversationHistory): CodexSurfaceSnapshot['messages'] {
-  return history.messages;
+  return conversation.load();
 }
 
 function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {

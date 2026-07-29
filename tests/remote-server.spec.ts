@@ -166,6 +166,67 @@ describe('CodexRemoteServer realtime voice', () => {
   });
 });
 
+describe('CodexRemoteServer thread history', () => {
+  it('hydrates an existing thread before projecting its messages', async () => {
+    const realtime = new FakeRealtimeSession('thread-1');
+    const conversation = fakeConversation(realtime);
+    const loadedSnapshot = conversationSnapshot();
+    loadedSnapshot.messages = [
+      {
+        id: 'message-user',
+        role: 'user',
+        status: 'complete',
+        parts: [{ type: 'text', text: 'Can you show the latest response?' }],
+      },
+      {
+        id: 'message-assistant',
+        role: 'assistant',
+        status: 'complete',
+        parts: [{ type: 'text', text: 'This response should reach the remote.' }],
+      },
+    ];
+    vi.mocked(conversation.load).mockResolvedValue(loadedSnapshot);
+
+    const server = new CodexRemoteServer({
+      surface: fakeSurface(conversation),
+      token: 'test-device-token',
+      defaultCwd: '/tmp/project',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+    });
+    servers.push(server);
+    const info = await server.start();
+
+    const response = await fetch(
+      `http://127.0.0.1:${info.port}/api/v1/threads/thread-1/messages`,
+      { headers: { 'X-Codex-Remote-Token': 'test-device-token' } },
+    );
+    const body = await response.json() as {
+      thread: {
+        messages: Array<{ role: string; text: string }>;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.thread.messages).toEqual([
+      {
+        id: 'message-user',
+        role: 'user',
+        status: 'complete',
+        text: 'Can you show the latest response?',
+      },
+      {
+        id: 'message-assistant',
+        role: 'assistant',
+        status: 'complete',
+        text: 'This response should reach the remote.',
+      },
+    ]);
+    expect(conversation.load).toHaveBeenCalledOnce();
+  });
+});
+
 class FakeRealtimeSession implements CodexRealtimeSession {
   readonly appendAudio = vi.fn<CodexRealtimeSession['appendAudio']>(async () => undefined);
   readonly appendText = vi.fn<CodexRealtimeSession['appendText']>(async () => undefined);
