@@ -5,6 +5,9 @@ release/
 coverage/
 .DS_Store
 *.log
+.env
+.env.*
+!.env.example
 
 firmware/waveshare/.pio/
 firmware/waveshare/src/credentials.h

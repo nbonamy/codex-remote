@@ -2,6 +2,7 @@
   "name": "codex-remote",
   "version": "0.1.0",
   "private": true,
+  "author": "Nicolas Bonamy",
   "description": "A pocket remote for local Codex threads, with an Electron host and ESP32-S3 client.",
   "type": "module",
   "main": "dist-main/main.js",
@@ -12,7 +13,9 @@
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "dist": "npm run build && electron-builder",
+    "dist": "npm run dist:mac",
+    "dist:mac": "npm run build && node scripts/package-macos.mjs",
+    "verify:mac": "node scripts/verify-macos-release.mjs",
     "firmware:build": "pio run -d firmware/waveshare",
     "firmware:upload": "npm run firmware:upload:v2",
     "firmware:upload:v1": "pio run -d firmware/waveshare -e waveshare-esp32-s3-touch-amoled-1_8-v1 -t upload",
@@ -62,7 +65,17 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "Codex-Remote-${version}-${arch}.${ext}",
+      "hardenedRuntime": true,
+      "notarize": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
+        "LSUIElement": true,
         "NSMicrophoneUsageDescription": "Codex Remote uses the microphone for push-to-talk Codex commands.",
         "NSSpeechRecognitionUsageDescription": "Codex Remote transcribes push-to-talk audio into Codex commands."
       }

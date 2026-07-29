@@ -11,8 +11,8 @@ Codex Remote has two parts:
    ESP32-S3-Touch-AMOLED-1.8. It browses threads, reads recent messages, and
    streams the board microphone while BOOT is held.
 
-The Electron app also contains the real device client as a 368 x 448 HTML
-simulator. This is the fastest way to iterate before the board arrives.
+The menu-bar app serves the real device client as a 368 x 448 HTML simulator.
+This is the fastest way to iterate before the board arrives.
 
 ## Current interaction
 
@@ -30,10 +30,9 @@ simulator. This is the fastest way to iterate before the board arrives.
 
 ### Simulator
 
-The Electron window embeds the 368 x 448 HTML device simulator next to the
-desktop status panel. Run `npm run dev` and use it while the hardware is
-unavailable; it connects to the same WebSocket and Codex app-server as the
-firmware.
+Run `npm run dev`, open the menu-bar item, and choose **Open Device Simulator**
+while the hardware is unavailable. The simulator opens in the default browser
+and connects to the same WebSocket and Codex app-server as the firmware.
 
 This is a behavioral and visual emulator, not instruction-level ESP32
 emulation. General ESP32 emulators do not model this board's custom
@@ -59,13 +58,12 @@ CODEX_REMOTE_CWD="$HOME/src" \
 npm run dev
 ```
 
-The preferred voice path mirrors the Codex desktop app: Electron creates a
-WebRTC peer with an audio track and the `oai-events` data channel, then
-negotiates it through app-server's experimental `thread/realtime/start`
-protocol. Codex owns transcription and returns live transcript and synthesized
-audio events. Codex Remote enables the child app-server's
-`realtime_conversation` feature without modifying the user's global Codex
-configuration.
+The preferred voice path uses app-server's experimental
+`thread/realtime/start` protocol over its v2 WebSocket transport. Codex owns
+transcription and returns live transcript and synthesized audio events. Codex
+Remote enables the child app-server's `realtime_conversation` feature without
+modifying the user's global Codex configuration or starting an Electron
+renderer.
 
 Realtime voice is currently gated by the Codex service. If negotiation is not
 available, the macOS host automatically transcribes the captured utterance with
@@ -76,9 +74,9 @@ currently requires access to Codex realtime because they do not yet have a
 local transcription fallback. The local fallback returns transcripts and
 normal Codex messages; synthesized speaker audio is a realtime-only feature.
 
-The browser simulator asks Electron for microphone access only from its
-loopback `http://127.0.0.1` origin. The ESP32 sends the same PCM stream over
-the authenticated device WebSocket.
+The browser simulator asks the browser for microphone access from its loopback
+`http://127.0.0.1` origin. The ESP32 sends the same PCM stream over the
+authenticated device WebSocket.
 
 ## API
 
@@ -147,3 +145,34 @@ The hardware bring-up and ES8311 audio path are adapted from
 already supports this exact Waveshare board. The framed local-audio and mDNS
 design was informed by
 [nicosuave/m5mic](https://github.com/nicosuave/m5mic). See `third-party/`.
+
+## Signed macOS release
+
+The macOS release uses a Developer ID Application certificate, Hardened Runtime,
+and Apple notarization. By default, the packaging script reads the existing
+credentials from `../witsy/.env` without copying them into this repository.
+
+```bash
+npm run dist
+```
+
+The credential file must define:
+
+- `IDENTIFY_DARWIN_CODE` (or standard `CSC_NAME`)
+- `APPLE_ID`
+- `APPLE_TEAM_ID`
+- `APPLE_PASSWORD` (or standard `APPLE_APP_SPECIFIC_PASSWORD`)
+
+To use another credential file:
+
+```bash
+CODEX_REMOTE_SIGNING_ENV=/absolute/path/to/signing.env npm run dist:mac
+```
+
+For CI, the standard variables can instead be supplied directly in the process
+environment without a credential file.
+
+Successful packaging creates DMG and ZIP artifacts under `release/`, then
+verifies the application signature, Gatekeeper assessment, and stapled
+notarization ticket. Signing credentials are never copied into this repository
+or packaged artifacts and local `.env` files are excluded from Git.

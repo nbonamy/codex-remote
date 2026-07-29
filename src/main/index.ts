@@ -4,11 +4,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   app,
-  BrowserWindow,
-  clipboard,
-  ipcMain,
-  session,
+  Menu,
+  nativeImage,
   shell,
+  Tray,
+  type NativeImage,
 } from 'electron';
 import {
   CodexSurface,
@@ -17,12 +17,13 @@ import {
 import simulatorHtml from '../server/simulator.html?raw';
 import { CodexRemoteServer } from '../server/remote-server';
 import type { CodexRemoteDesktopState } from './contracts';
-import { ElectronWebRtcBridge } from './realtime-webrtc-bridge';
+import { trayMenuTemplate } from './tray-menu';
 
-let mainWindow: BrowserWindow | null = null;
+const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAACOSURBVHgBpZLRDYAgEEOrEzgCozCCGzkCbKArOIlugJvgoRAUNcLRpvGH19TkgFQWkqIohhK8UEaKwKcsOg/+WR1vX+AlA74u6q4FqgCOSzwsGHCwbKliAF89Cv89tWmOT4VaVMoVbOBrdQUz+FrD6XItzh4LzYB1HFJ9yrEkZ4l+wvcid9pTssh4UKbPd+4vED2Nd54iAAAAAElFTkSuQmCC';
+
+let tray: Tray | null = null;
 let surface: CodexSurface | null = null;
 let remoteServer: CodexRemoteServer | null = null;
-let realtimeBridge: ElectronWebRtcBridge | null = null;
 let desktopState: CodexRemoteDesktopState = {
   phase: 'starting',
   codexStatus: 'idle',
@@ -33,30 +34,46 @@ let desktopState: CodexRemoteDesktopState = {
 
 function publishState(patch: Partial<CodexRemoteDesktopState>): void {
   desktopState = { ...desktopState, ...patch };
-  mainWindow?.webContents.send('codex-remote:state', structuredClone(desktopState));
+  refreshTrayMenu();
 }
 
-async function createMainWindow(): Promise<BrowserWindow> {
-  const window = new BrowserWindow({
-    width: 1060,
-    height: 720,
-    minWidth: 820,
-    minHeight: 600,
-    backgroundColor: '#080a0c',
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      preload: join(import.meta.dirname, 'preload.cjs'),
-    },
-  });
-  const devServerUrl = process.env.VITE_DEV_SERVER_URL;
-  if (devServerUrl) {
-    await window.loadURL(devServerUrl);
-  } else {
-    await window.loadFile(join(import.meta.dirname, '../dist-renderer/index.html'));
+function createTray(): void {
+  if (process.platform === 'darwin') app.dock?.hide();
+  tray = new Tray(createTrayIcon());
+  tray.setToolTip('Codex Remote');
+  refreshTrayMenu();
+}
+
+function createTrayIcon(): NativeImage {
+  if (process.platform === 'darwin') {
+    const symbol = nativeImage.createFromNamedImage('terminal', {
+      pointSize: 16,
+      weight: 'semibold',
+      scale: 'small',
+    });
+    if (!symbol.isEmpty()) {
+      symbol.setTemplateImage(true);
+      return symbol;
+    }
   }
-  return window;
+  return nativeImage.createFromDataURL(FALLBACK_TRAY_ICON);
+}
+
+function refreshTrayMenu(): void {
+  if (!tray) return;
+  tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(desktopState, {
+    openSimulator: () => {
+      const simulatorUrl = desktopState.server?.simulatorUrl;
+      if (!simulatorUrl) return;
+      void shell.openExternal(safeExternalUrl(simulatorUrl).toString()).catch((error) => {
+        publishState({
+          phase: 'error',
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    },
+    quit: () => app.quit(),
+  })));
 }
 
 async function startServices(): Promise<void> {
@@ -82,7 +99,7 @@ async function startServices(): Promise<void> {
       accountLabel: snapshot.authentication.account
         ? accountLabel(snapshot.authentication.account)
         : null,
-      ...(snapshot.status === 'error' ? { error: snapshot.error } : {}),
+      error: snapshot.status === 'error' ? snapshot.error : null,
     });
   });
 
@@ -94,7 +111,6 @@ async function startServices(): Promise<void> {
     defaultCwd,
     simulatorHtml,
     port,
-    realtimeBridge: realtimeBridge ?? undefined,
     transcribeAudio: process.platform === 'darwin'
       ? (wave) => transcribeWithAppleSpeechAnalyzer(wave)
       : undefined,
@@ -151,52 +167,11 @@ function safeExternalUrl(value: string): URL {
   return url;
 }
 
-function isTrustedMicrophoneOrigin(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' && url.hostname === '127.0.0.1';
-  } catch {
-    return false;
-  }
-}
-
-function configureMicrophonePermissions(): void {
-  session.defaultSession.setPermissionCheckHandler(
-    (_webContents, permission, requestingOrigin) =>
-      permission === 'media' && isTrustedMicrophoneOrigin(requestingOrigin),
-  );
-  session.defaultSession.setPermissionRequestHandler(
-    (_webContents, permission, callback, details) => {
-      const audioOnly = 'mediaTypes' in details
-        && details.mediaTypes?.every((mediaType) => mediaType === 'audio') === true;
-      callback(
-        permission === 'media'
-        && audioOnly
-        && isTrustedMicrophoneOrigin(details.requestingUrl),
-      );
-    },
-  );
-}
-
-ipcMain.handle('codex-remote:get-state', () => structuredClone(desktopState));
-ipcMain.handle('codex-remote:copy', (_event, value: unknown) => {
-  if (typeof value !== 'string') throw new TypeError('Clipboard value must be a string');
-  clipboard.writeText(value);
-});
-ipcMain.handle('codex-remote:open-external', async (_event, value: unknown) => {
-  if (typeof value !== 'string') throw new TypeError('URL must be a string');
-  await shell.openExternal(safeExternalUrl(value).toString());
-});
-
-app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+app.disableHardwareAcceleration();
+Menu.setApplicationMenu(null);
 
 app.whenReady().then(async () => {
-  configureMicrophonePermissions();
-  mainWindow = await createMainWindow();
-  realtimeBridge = new ElectronWebRtcBridge(() => mainWindow);
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
+  createTray();
   try {
     await startServices();
   } catch (error) {
@@ -208,20 +183,13 @@ app.whenReady().then(async () => {
   }
 });
 
-app.on('activate', () => {
-  if (!mainWindow) {
-    void createMainWindow().then((window) => {
-      mainWindow = window;
-    });
-  }
-});
-
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // The tray is the application UI, so closing browser windows must not stop it.
 });
 
 app.on('before-quit', () => {
-  realtimeBridge?.dispose();
+  tray?.destroy();
+  tray = null;
   void remoteServer?.close();
   void surface?.close();
 });

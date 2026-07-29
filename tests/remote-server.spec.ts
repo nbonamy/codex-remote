@@ -27,6 +27,68 @@ afterEach(async () => {
 });
 
 describe('CodexRemoteServer realtime voice', () => {
+  it('streams realtime voice directly over the app-server WebSocket without a renderer', async () => {
+    const realtime = new FakeRealtimeSession('thread-1');
+    const conversation = fakeConversation(realtime);
+    const startRealtime = vi.spyOn(conversation, 'startRealtime');
+    const server = new CodexRemoteServer({
+      surface: fakeSurface(conversation),
+      token: 'test-device-token',
+      defaultCwd: '/tmp/project',
+      simulatorHtml: '<!doctype html><title>sim</title>',
+      port: 0,
+      advertise: false,
+    });
+    servers.push(server);
+    const info = await server.start();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/device?token=test-device-token`,
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+
+    await messages.nextJson('hello');
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({
+      type: 'audio_start',
+      threadId: 'thread-1',
+      sampleRate: 24_000,
+    }));
+    socket.send(Buffer.alloc(4_800, 1));
+    socket.send(JSON.stringify({ type: 'audio_end' }));
+    await messages.nextJson('status');
+
+    await vi.waitFor(() => expect(realtime.appendAudio).toHaveBeenCalledTimes(2));
+    expect(startRealtime).toHaveBeenCalledWith({
+      outputModality: 'audio',
+      version: 'v2',
+      includeStartupContext: true,
+      flushTranscriptTailOnSessionEnd: true,
+      transport: { type: 'websocket' },
+    });
+    expect(realtime.appendAudio.mock.calls[0]?.[0]).toMatchObject({
+      sampleRate: 24_000,
+      numChannels: 1,
+    });
+    expect(realtime.appendAudio.mock.calls[0]?.[0].data).toHaveLength(4_800);
+    expect(realtime.appendAudio.mock.calls[1]?.[0]).toMatchObject({
+      sampleRate: 24_000,
+      numChannels: 1,
+      samplesPerChannel: 16_800,
+    });
+
+    realtime.emit(realtimeEvent('realtime.audioDelta', {
+      audio: {
+        data: new Uint8Array([1, 2, 3, 4]),
+        sampleRate: 24_000,
+        numChannels: 1,
+        samplesPerChannel: 2,
+        itemId: 'assistant-audio-1',
+      },
+    }));
+    expect(await messages.nextBinary()).toStrictEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
   it('bridges device PCM through WebRTC and streams transcript and audio back', async () => {
     const realtime = new FakeRealtimeSession(
       'thread-1',
