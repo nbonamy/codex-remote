@@ -49,6 +49,8 @@ export type DeviceServerMessage =
     type: 'hello';
     apiVersion: number;
     platform: NodeJS.Platform;
+    hostId: string;
+    hostName: string;
     transcription: 'available' | 'unavailable';
   }
   | { type: 'threads'; threads: DeviceThread[] }

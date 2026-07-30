@@ -4,27 +4,29 @@ import type { CodexRemoteDesktopState } from '../main/contracts';
 
 const state = ref<CodexRemoteDesktopState>({
   phase: 'starting',
-  codexStatus: 'idle',
-  accountLabel: null,
   error: null,
+  hosts: [],
   pairingOpenUntil: null,
   pairedDeviceCount: 0,
   pendingPairings: [],
   server: null,
 });
+const selectedHostId = ref<string | null>(null);
 let unsubscribe: () => void = () => undefined;
 
+const activeHost = computed(() => (
+  state.value.hosts.find((host) => host.id === selectedHostId.value)
+  ?? state.value.hosts[0]
+  ?? null
+));
 const primaryNetworkUrl = computed(() => state.value.server?.networkUrls[0] ?? null);
-const connectionLabel = computed(() => {
-  if (state.value.phase === 'error') return 'Needs attention';
-  if (state.value.phase !== 'ready') return 'Starting';
-  return 'Ready for device';
-});
 
 onMounted(async () => {
   state.value = await window.codexRemote.getState();
+  selectedHostId.value = state.value.hosts[0]?.id ?? null;
   unsubscribe = window.codexRemote.onStateChange((next) => {
     state.value = next;
+    selectedHostId.value ??= next.hosts[0]?.id ?? null;
   });
 });
 
@@ -36,8 +38,16 @@ async function copy(value: string | null | undefined): Promise<void> {
 
 async function openSimulator(): Promise<void> {
   if (state.value.server) {
-    await window.codexRemote.openExternal(state.value.server.simulatorUrl);
+    const url = new URL(state.value.server.simulatorUrl);
+    if (activeHost.value) url.searchParams.set('hostId', activeHost.value.id);
+    await window.codexRemote.openExternal(url.toString());
   }
+}
+
+function hostStatusLabel(host: CodexRemoteDesktopState['hosts'][number]): string {
+  if (host.codexStatus === 'error') return 'Needs attention';
+  if (host.codexStatus !== 'ready') return 'Starting';
+  return 'Ready for device';
 }
 </script>
 
@@ -53,21 +63,24 @@ async function openSimulator(): Promise<void> {
       </header>
 
       <div
+        v-for="host in state.hosts"
+        :key="host.id"
         class="status-card"
-        :class="state.phase"
+        :class="[host.codexStatus, { selected: host.id === activeHost?.id }]"
+        @click="selectedHostId = host.id"
       >
         <span class="status-light" />
         <div>
-          <strong>{{ connectionLabel }}</strong>
-          <span>{{ state.accountLabel || 'Codex authentication pending' }}</span>
+          <strong>{{ host.name }} · {{ hostStatusLabel(host) }}</strong>
+          <span>{{ host.accountLabel || 'Codex authentication pending' }}</span>
         </div>
       </div>
 
       <p
-        v-if="state.error"
+        v-if="state.error || activeHost?.error"
         class="error"
       >
-        {{ state.error }}
+        {{ state.error || activeHost?.error }}
       </p>
 
       <div
@@ -100,8 +113,8 @@ async function openSimulator(): Promise<void> {
       <div class="note">
         <span>Voice path</span>
         <p>
-          24 kHz PCM prefers Codex WebRTC realtime. When that service is
-          unavailable, macOS transcribes locally and sends a normal command.
+          macOS transcribes 24 kHz PCM locally and sends a normal Codex command.
+          API-key-authenticated hosts can additionally use Codex realtime audio.
         </p>
       </div>
     </section>

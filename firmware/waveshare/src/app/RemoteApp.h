@@ -48,7 +48,6 @@ private:
   void createThread();
   void backToThreads();
   void showBridges();
-  void closeBridges();
   void startRecording();
   void stopRecording();
   void updateReaderSelection();

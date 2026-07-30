@@ -35,6 +35,62 @@ afterEach(async () => {
 });
 
 describe('CodexRemoteServer device pairing', () => {
+  it('routes both Codex homes through one server using the host id', async () => {
+    const codexSurface = fakeSurface(
+      fakeConversation(new FakeRealtimeSession('thread-1')),
+    );
+    const adeSurface = fakeSurface(
+      fakeConversation(new FakeRealtimeSession('thread-1')),
+    );
+    const server = new CodexRemoteServer({
+      hosts: [
+        { id: 'codex', name: 'Codex', surface: codexSurface },
+        { id: 'codex-ade', name: 'Codex ADE', surface: adeSurface },
+      ],
+      token: 'legacy-device-token',
+      defaultCwd: '/tmp/project',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+    });
+    servers.push(server);
+    const info = await server.start();
+    expect(info.port).toBeGreaterThan(0);
+    expect(info.simulatorUrl).toContain('hostId=codex');
+
+    const baseUrl = `http://127.0.0.1:${info.port}`;
+    const response = await fetch(`${baseUrl}/api/v1/hosts`);
+    await expect(response.json()).resolves.toEqual({
+      hosts: [
+        { id: 'codex', name: 'Codex', status: 'ready' },
+        { id: 'codex-ade', name: 'Codex ADE', status: 'ready' },
+      ],
+    });
+    const adeThreads = await fetch(`${baseUrl}/api/v1/hosts/codex-ade/threads`, {
+      headers: { 'X-Codex-Remote-Token': 'legacy-device-token' },
+    });
+    expect(adeThreads.status).toBe(200);
+    expect(adeSurface.listConversations).toHaveBeenCalledOnce();
+    expect(codexSurface.listConversations).not.toHaveBeenCalled();
+
+    const unscopedThreads = await fetch(`${baseUrl}/api/v1/threads`, {
+      headers: { 'X-Codex-Remote-Token': 'legacy-device-token' },
+    });
+    expect(unscopedThreads.status).toBe(404);
+
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/hosts/codex-ade/device`,
+      { headers: { 'X-Codex-Remote-Token': 'legacy-device-token' } },
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+    await expect(messages.nextJson('hello')).resolves.toMatchObject({
+      type: 'hello',
+      hostId: 'codex-ade',
+      hostName: 'Codex ADE',
+    });
+  });
+
   it('requires tray authorization then accepts the device-specific token', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'codex-remote-server-'));
     temporaryDirectories.push(directory);
@@ -92,7 +148,7 @@ describe('CodexRemoteServer device pairing', () => {
     expect(approved.status).toBe('approved');
 
     const socket = new WebSocket(
-      `ws://127.0.0.1:${info.port}/api/v1/device`,
+      `ws://127.0.0.1:${info.port}/api/v1/hosts/codex/device`,
       { headers: { 'X-Codex-Remote-Token': approved.token } },
     );
     sockets.push(socket);
@@ -119,7 +175,7 @@ describe('CodexRemoteServer realtime voice', () => {
     servers.push(server);
     const info = await server.start();
     const socket = new WebSocket(
-      `ws://127.0.0.1:${info.port}/api/v1/device?token=test-device-token`,
+      `ws://127.0.0.1:${info.port}/api/v1/hosts/codex/device?token=test-device-token`,
     );
     sockets.push(socket);
     const messages = new SocketMessages(socket);
@@ -188,7 +244,7 @@ describe('CodexRemoteServer realtime voice', () => {
     servers.push(server);
     const info = await server.start();
     const socket = new WebSocket(
-      `ws://127.0.0.1:${info.port}/api/v1/device?token=test-device-token`,
+      `ws://127.0.0.1:${info.port}/api/v1/hosts/codex/device?token=test-device-token`,
     );
     sockets.push(socket);
     const messages = new SocketMessages(socket);
@@ -247,7 +303,7 @@ describe('CodexRemoteServer realtime voice', () => {
     servers.push(server);
     const info: RemoteServerInfo = await server.start();
     const socket = new WebSocket(
-      `ws://127.0.0.1:${info.port}/api/v1/device?token=wrong-token`,
+      `ws://127.0.0.1:${info.port}/api/v1/hosts/codex/device?token=wrong-token`,
     );
     sockets.push(socket);
     await expect(new Promise<void>((resolve, reject) => {
@@ -276,7 +332,7 @@ describe('CodexRemoteServer realtime voice', () => {
     servers.push(server);
     const info = await server.start();
     const socket = new WebSocket(
-      `ws://127.0.0.1:${info.port}/api/v1/device?token=test-device-token`,
+      `ws://127.0.0.1:${info.port}/api/v1/hosts/codex/device?token=test-device-token`,
     );
     sockets.push(socket);
     const messages = new SocketMessages(socket);
@@ -322,7 +378,7 @@ describe('CodexRemoteServer realtime voice', () => {
     const info = await server.start();
     expect(info.realtimeVoiceAvailable).toBe(false);
     const socket = new WebSocket(
-      `ws://127.0.0.1:${info.port}/api/v1/device?token=test-device-token`,
+      `ws://127.0.0.1:${info.port}/api/v1/hosts/codex/device?token=test-device-token`,
     );
     sockets.push(socket);
     const messages = new SocketMessages(socket);
@@ -382,7 +438,7 @@ describe('CodexRemoteServer thread history', () => {
     const info = await server.start();
 
     const response = await fetch(
-      `http://127.0.0.1:${info.port}/api/v1/threads/thread-1/messages`,
+      `http://127.0.0.1:${info.port}/api/v1/hosts/codex/threads/thread-1/messages`,
       { headers: { 'X-Codex-Remote-Token': 'test-device-token' } },
     );
     const body = await response.json() as {

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "author": "Nicolas Bonamy",
-  "description": "A pocket remote for local Codex threads, with an Electron host and ESP32-S3 client.",
+  "description": "A pocket remote for local Codex threads, with an Electron router and ESP32-S3 client.",
   "type": "module",
   "main": "dist-main/main.js",
   "scripts": {

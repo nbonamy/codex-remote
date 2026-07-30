@@ -4,9 +4,10 @@ A pocket remote for local Codex threads.
 
 Codex Remote has two parts:
 
-1. A cross-platform Electron host built on `codex-app-sdk`. It launches Codex
-   app-server, exposes a token-protected LAN HTTP/WebSocket API, advertises
-   itself with mDNS, and bridges push-to-talk audio into Codex.
+1. A cross-platform Electron router built on `codex-app-sdk`. It connects to
+   the desktop-owned Codex app-server control sockets, exposes one
+   token-protected LAN HTTP/WebSocket API, advertises one mDNS service, and
+   routes push-to-talk audio into Codex.
 2. Native PlatformIO/Arduino firmware for the Waveshare
    ESP32-S3-Touch-AMOLED-1.8. It browses threads, reads recent messages, and
    streams the board microphone while BOOT is held.
@@ -19,10 +20,11 @@ This is the fastest way to iterate before the board arrives.
 - Thread list: tap a thread to open it; swipe down for the next page and up for
   the previous page.
 - Thread list: press BOOT to create and open a new thread.
-- Thread list: press PWR to disconnect and choose another discovered bridge.
-- Bridge list: tap a paired bridge to reconnect, or tap a new bridge to request
+- Thread list: press PWR to disconnect and choose another discovered host.
+- Host list: tap a paired host to reconnect, or tap a new host to request
   pairing. Confirm the matching six-digit code from the Mac menu-bar app.
-- Bridge list: press BOOT to rescan and PWR to return to the current bridge.
+- Entering the Host list disconnects and clears the active host. There is no
+  Back action: tap a host to connect, or press BOOT to rescan.
 - Conversation: hold BOOT to talk; release to transcribe and send to Codex.
 - Conversation: tap the back arrow to return to the thread list.
 - Conversation: swipe down for the next message page and up for the previous
@@ -52,8 +54,31 @@ npm install
 npm run dev
 ```
 
-The API listens on `0.0.0.0:47776` by default. The app keeps a persistent
-bridge identity and issues a different credential to every approved device.
+The app exposes **Codex** through one router using `~/.codex`. Codex must
+already be running a shared app-server on its Unix control socket; Codex Remote
+connects as a second client and never falls back to a separate child process.
+That is what makes ESP32 prompts appear and stream in the desktop-owned task.
+
+<!-- Codex ADE support is intentionally disabled for now.
+Codex ADE uses `~/.codex-ade` as an independent logical host through the same
+router.
+-->
+
+Start the matching desktop app with `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1` and
+run its shared server before launching Codex Remote. The expected sockets are:
+
+```text
+~/.codex/app-server-control/app-server-control.sock
+```
+
+<!-- Codex ADE socket, intentionally disabled for now:
+~/.codex-ade/app-server-control/app-server-control.sock
+-->
+
+The router uses port `47776`, one mDNS identity, and one device pairing. Every
+Codex API route includes the host id. `CODEX_REMOTE_PORT` changes the router's
+single listening port.
+
 Override the defaults for development with:
 
 ```bash
@@ -64,14 +89,14 @@ npm run dev
 
 On macOS, push-to-talk uses the Apple SpeechAnalyzer helper packaged by
 `codex-app-sdk`, then sends the transcript as an ordinary Codex text command.
-The ESP32 and bridge therefore work with the user's normal ChatGPT-authenticated
+The ESP32 and host therefore work with the user's normal ChatGPT-authenticated
 Codex session and do not need an OpenAI API key.
 
 App-server's experimental `thread/realtime/start` path is optional and requires
 OpenAI API key authentication. Codex Remote only attempts it when the connected
-Codex account is API-key authenticated or the bridge process has
+Codex account is API-key authenticated or the host process has
 `OPENAI_API_KEY`. In that mode Codex owns transcription and returns live
-transcript and synthesized audio events. The bridge enables the child
+transcript and synthesized audio events. The host enables the child
 app-server's `realtime_conversation` feature without modifying the user's
 global Codex configuration or starting an Electron renderer.
 
@@ -93,23 +118,25 @@ short-lived request and polls for explicit approval from the desktop tray.
 HTTP also remains useful for diagnostics, external integrations, and serving
 the HTML simulator.
 
-Normal `/api/v1/*` routes require `X-Codex-Remote-Token`. The pairing
-information and request routes are intentionally unauthenticated, but a request
-can only be created during the two-minute window opened by **Pair New Device…**
-in the menu-bar app.
+Host metadata and pairing routes are intentionally unauthenticated so a new
+device can present the available hosts before it is paired. All host-scoped
+Codex routes require `X-Codex-Remote-Token`; a pairing request can only be
+created during the two-minute window opened by **Pair New Device…** in the
+menu-bar app.
 
 ```text
 GET  /health
 GET  /api/v1/pairing/info
 POST /api/v1/pairing/requests
 GET  /api/v1/pairing/requests/:id
-GET  /api/v1/state
-GET  /api/v1/threads
-GET  /api/v1/threads/:id/messages
-POST /api/v1/threads
-POST /api/v1/threads/:id/messages
-POST /api/v1/threads/:id/interrupt
-WS   /api/v1/device
+GET  /api/v1/hosts
+GET  /api/v1/hosts/:hostId/state
+GET  /api/v1/hosts/:hostId/threads
+GET  /api/v1/hosts/:hostId/threads/:id/messages
+POST /api/v1/hosts/:hostId/threads
+POST /api/v1/hosts/:hostId/threads/:id/messages
+POST /api/v1/hosts/:hostId/threads/:id/interrupt
+WS   /api/v1/hosts/:hostId/device
 ```
 
 The device WebSocket authenticates with its per-device credential in the same
@@ -128,10 +155,12 @@ cp firmware/waveshare/src/credentials.h.example \
   firmware/waveshare/src/credentials.h
 ```
 
-Fill in the Wi-Fi credentials. Leave `SERVER_HOST` empty to discover every
-Electron bridge through `_codex-remote._tcp.local`, then press PWR on the
-thread list to choose and pair one. `DEVICE_TOKEN` is only an optional
-migration fallback for firmware paired with older host builds.
+Fill in the Wi-Fi credentials. Leave `SERVER_HOST` empty to discover Codex
+Remote routers through `_codex-remote._tcp.local`. The firmware reads the host
+list from each router, then presents Codex in **Choose host**.
+<!-- Codex ADE is also presented here when its host profile is enabled. -->
+Pairing authorizes the device once per router, not once per Codex host.
+`DEVICE_TOKEN` is only an optional migration fallback for older builds.
 
 ```bash
 npm run firmware:build

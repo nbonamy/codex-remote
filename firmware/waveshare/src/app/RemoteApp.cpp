@@ -121,9 +121,6 @@ void RemoteApp::handleButtons() {
     if (buttonA && !_buttonAPrevious && !_client.pairingPending()) {
       _client.refreshBridges();
     }
-    if (buttonB && !_buttonBPrevious) {
-      closeBridges();
-    }
   }
 
   _buttonAPrevious = buttonA;
@@ -295,12 +292,6 @@ void RemoteApp::showBridges() {
   _dirty = true;
 }
 
-void RemoteApp::closeBridges() {
-  _view = View::Threads;
-  _client.cancelBridgeSelection();
-  _dirty = true;
-}
-
 void RemoteApp::startRecording() {
   if (!_client.connected() || _client.activeThreadId().isEmpty()) {
     return;
@@ -391,13 +382,13 @@ void RemoteApp::draw() {
   drawHeader();
   if (_view == View::Threads) {
     drawThreads();
-    drawFooter("BOOT New thread     PWR Bridges");
+    drawFooter("BOOT New thread       PWR Hosts");
   } else if (_view == View::Conversation) {
     drawConversation();
     drawFooter(_recording ? "BOOT  Release" : "BOOT  Hold to talk");
   } else {
     drawBridges();
-    drawFooter("BOOT Refresh       PWR Back");
+    drawFooter("BOOT Refresh");
   }
   _lastDrawMs = millis();
   _dirty = false;
@@ -413,7 +404,11 @@ void RemoteApp::drawHeader() {
   display.setTextSize(1);
   display.setTextColor(kWhite);
   display.setCursor(50, 22);
-  display.print("CODEX REMOTE");
+  const String headerName =
+      _view == View::Bridges || _client.selectedHostName().isEmpty()
+          ? "CODEX REMOTE"
+          : _client.selectedHostName();
+  display.print(headerName.substring(0, 40));
 
   display.fillCircle(319, 27, 4, _client.connected() ? kMint : kCoral);
   display.setTextColor(kMuted);
@@ -486,12 +481,12 @@ void RemoteApp::drawBridges() {
   const int first = _bridgePage * kBridgesPerPage;
   const int last = min(_client.bridgeCount(), first + kBridgesPerPage);
   if (_client.bridgeCount() == 0) {
-    display.print("NO BRIDGES FOUND");
+    display.print("NO HOSTS FOUND");
     display.setCursor(16, 92);
     display.print("Open Codex Remote on a computer.");
     return;
   }
-  display.printf("%d-%d / %d BRIDGES", first + 1, last,
+  display.printf("%d-%d / %d HOSTS", first + 1, last,
                  _client.bridgeCount());
   for (int visible = 0; visible < kBridgesPerPage; visible++) {
     const int index = first + visible;
@@ -500,18 +495,21 @@ void RemoteApp::drawBridges() {
     }
     const RemoteBridge &bridge = _client.bridge(index);
     const int y = 84 + visible * 58;
-    display.fillRoundRect(14, y, 340, 50, 11,
-                          bridge.selected ? kPanelSelected : kPanel);
-    display.setTextColor(bridge.paired ? kMint : kMuted);
-    display.setCursor(26, y + 19);
-    display.print(bridge.paired ? "*" : "+");
+    display.fillRoundRect(14, y, 340, 50, 11, kPanel);
+    const uint16_t iconColor = bridge.paired ? kMint : kMuted;
+    display.drawRoundRect(24, y + 13, 20, 14, 3, iconColor);
+    display.drawFastVLine(33, y + 27, 4, iconColor);
+    display.drawFastHLine(28, y + 31, 12, iconColor);
     display.setTextColor(kWhite);
-    display.setCursor(48, y + 9);
+    display.setCursor(56, y + 9);
     display.print(bridge.name.substring(0, 42));
     display.setTextColor(kMuted);
-    display.setCursor(48, y + 29);
-    display.print(bridge.paired ? "PAIRED - TAP TO CONNECT"
-                                : "NEW - TAP TO PAIR");
+    display.setCursor(56, y + 29);
+    display.print(bridge.routerName.substring(0, 39));
+    display.setTextSize(2);
+    display.setCursor(331, y + 15);
+    display.print(">");
+    display.setTextSize(1);
   }
 }
 

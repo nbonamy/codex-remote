@@ -16,22 +16,36 @@ import {
 } from 'codex-app-sdk/node';
 import simulatorHtml from '../server/simulator.html?raw';
 import { PairingStore } from '../server/pairing-store';
-import { CodexRemoteServer } from '../server/remote-server';
-import type { CodexRemoteDesktopState } from './contracts';
+import {
+  CodexRemoteServer,
+  type RemoteCodexHost,
+} from '../server/remote-server';
+import {
+  codexHostProfiles,
+  type CodexRemoteHostProfile,
+} from './host-profiles';
+import type {
+  CodexRemoteDesktopState,
+  CodexRemoteHostState,
+} from './contracts';
 import { trayMenuTemplate } from './tray-menu';
 
 const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAACOSURBVHgBpZLRDYAgEEOrEzgCozCCGzkCbKArOIlugJvgoRAUNcLRpvGH19TkgFQWkqIohhK8UEaKwKcsOg/+WR1vX+AlA74u6q4FqgCOSzwsGHCwbKliAF89Cv89tWmOT4VaVMoVbOBrdQUz+FrD6XItzh4LzYB1HFJ9yrEkZ4l+wvcid9pTssh4UKbPd+4vED2Nd54iAAAAAElFTkSuQmCC';
 
+type HostRuntime = {
+  profile: CodexRemoteHostProfile;
+  surface: CodexSurface;
+};
+
 let tray: Tray | null = null;
-let surface: CodexSurface | null = null;
-let remoteServer: CodexRemoteServer | null = null;
-let pairingStore: PairingStore | null = null;
+let hostRuntimes: HostRuntime[] = [];
+let server: CodexRemoteServer | null = null;
+let pairing: PairingStore | null = null;
 let pairingTimer: NodeJS.Timeout | null = null;
 let desktopState: CodexRemoteDesktopState = {
   phase: 'starting',
-  codexStatus: 'idle',
-  accountLabel: null,
   error: null,
+  hosts: [],
   pairingOpenUntil: null,
   pairedDeviceCount: 0,
   pendingPairings: [],
@@ -41,6 +55,17 @@ let desktopState: CodexRemoteDesktopState = {
 function publishState(patch: Partial<CodexRemoteDesktopState>): void {
   desktopState = { ...desktopState, ...patch };
   refreshTrayMenu();
+}
+
+function publishHostState(
+  hostId: string,
+  patch: Partial<CodexRemoteHostState>,
+): void {
+  publishState({
+    hosts: desktopState.hosts.map((host) => (
+      host.id === hostId ? { ...host, ...patch } : host
+    )),
+  });
 }
 
 function createTray(): void {
@@ -72,82 +97,106 @@ function refreshTrayMenu(): void {
       if (!simulatorUrl) return;
       void shell.openExternal(safeExternalUrl(simulatorUrl).toString()).catch((error) => {
         publishState({
-          phase: 'error',
           error: error instanceof Error ? error.message : String(error),
         });
       });
     },
     openPairing: () => {
-      const expiresAt = pairingStore?.openPairingWindow();
+      const expiresAt = pairing?.openPairingWindow();
       if (expiresAt) schedulePairingRefresh(expiresAt);
     },
-    closePairing: () => pairingStore?.closePairingWindow(),
+    closePairing: () => pairing?.closePairingWindow(),
     approvePairing: (requestId) => {
-      void pairingStore?.approve(requestId).catch((error) => {
+      void pairing?.approve(requestId).catch((error) => {
         publishState({
           error: error instanceof Error ? error.message : String(error),
         });
       });
     },
-    rejectPairing: (requestId) => pairingStore?.reject(requestId),
+    rejectPairing: (requestId) => pairing?.reject(requestId),
     quit: () => app.quit(),
   })));
 }
 
 async function startServices(): Promise<void> {
   const defaultCwd = process.env.CODEX_REMOTE_CWD?.trim() || join(homedir(), 'src');
-  const port = parsedPort(process.env.CODEX_REMOTE_PORT);
+  const profiles = codexHostProfiles(homedir());
+  desktopState = {
+    ...desktopState,
+    hosts: profiles.map(initialHostState),
+  };
+  refreshTrayMenu();
+
   const token = await loadOrCreateToken();
-  pairingStore = await PairingStore.open(
+  pairing = await PairingStore.open(
     join(app.getPath('userData'), 'device-pairings.json'),
     `Codex Remote on ${hostname()}`,
   );
-  pairingStore.onChange(refreshPairingState);
+  pairing.onChange(refreshPairingState);
   refreshPairingState();
 
-  surface = new CodexSurface({
-    cwd: defaultCwd,
-    autoSelectFirstConversation: false,
-    clientInfo: {
-      name: 'codex_remote',
-      title: 'Codex Remote',
-      version: app.getVersion(),
-    },
-    transport: {
-      configOverrides: ['features.realtime_conversation=true'],
-    },
-  });
-  surface.onStateChange((snapshot) => {
-    publishState({
-      codexStatus: snapshot.status,
-      accountLabel: snapshot.authentication.account
-        ? accountLabel(snapshot.authentication.account)
-        : null,
-      error: snapshot.status === 'error' ? snapshot.error : null,
+  hostRuntimes = profiles.map((profile) => {
+    const surface = new CodexSurface({
+      codexHome: profile.codexHome,
+      cwd: defaultCwd,
+      autoSelectFirstConversation: false,
+      clientInfo: {
+        name: profile.id === 'codex' ? 'codex_remote' : 'codex_remote_ade',
+        title: `Codex Remote · ${profile.name}`,
+        version: app.getVersion(),
+      },
+      transport: {
+        type: 'unixSocket',
+        socketPath: profile.appServerSocketPath,
+      },
     });
+    surface.onStateChange((snapshot) => {
+      publishHostState(profile.id, {
+        codexStatus: snapshot.status,
+        accountLabel: snapshot.authentication.account
+          ? accountLabel(snapshot.authentication.account)
+          : null,
+        error: snapshot.status === 'error' ? snapshot.error : null,
+      });
+    });
+    return { profile, surface };
   });
 
-  publishState({ codexStatus: 'connecting', error: null });
-  await surface.connect();
-  remoteServer = new CodexRemoteServer({
+  await Promise.all(hostRuntimes.map(async ({ profile, surface }) => {
+    publishHostState(profile.id, { codexStatus: 'connecting', error: null });
+    try {
+      await surface.connect();
+    } catch (error) {
+      publishHostState(profile.id, {
+        codexStatus: 'error',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }));
+
+  const remoteHosts: RemoteCodexHost[] = hostRuntimes.map(({ profile, surface }) => ({
+    id: profile.id,
+    name: profile.name,
     surface,
+    realtimeVoiceAvailable: () => (
+      surface.getSnapshot().authentication.account?.type === 'apiKey'
+      || Boolean(process.env.OPENAI_API_KEY?.trim())
+    ),
+  }));
+  server = new CodexRemoteServer({
+    hosts: remoteHosts,
     token,
     defaultCwd,
     simulatorHtml,
-    port,
-    pairing: pairingStore,
-    realtimeVoiceAvailable: () => (
-      surface?.getSnapshot().authentication.account?.type === 'apiKey'
-      || Boolean(process.env.OPENAI_API_KEY?.trim())
-    ),
+    port: parsedPort(process.env.CODEX_REMOTE_PORT),
+    pairing,
     transcribeAudio: process.platform === 'darwin'
       ? (wave) => transcribeWithAppleSpeechAnalyzer(wave)
       : undefined,
   });
-  const info = await remoteServer.start();
+  const info = await server.start();
   publishState({
     phase: 'ready',
-    codexStatus: surface.getSnapshot().status,
     error: null,
     server: {
       port: info.port,
@@ -160,12 +209,23 @@ async function startServices(): Promise<void> {
   });
 }
 
+function initialHostState(profile: CodexRemoteHostProfile): CodexRemoteHostState {
+  return {
+    id: profile.id,
+    name: profile.name,
+    codexHome: profile.codexHome,
+    codexStatus: 'idle',
+    accountLabel: null,
+    error: null,
+  };
+}
+
 function refreshPairingState(): void {
-  if (!pairingStore) return;
+  if (!pairing) return;
   publishState({
-    pairingOpenUntil: pairingStore.pairingExpiresAt(),
-    pairedDeviceCount: pairingStore.pairedDevices().length,
-    pendingPairings: pairingStore.pendingRequests().map((request) => ({
+    pairingOpenUntil: pairing.pairingExpiresAt(),
+    pairedDeviceCount: pairing.pairedDevices().length,
+    pendingPairings: pairing.pendingRequests().map((request) => ({
       id: request.id,
       deviceName: request.deviceName,
       code: request.code,
@@ -228,7 +288,6 @@ app.whenReady().then(async () => {
   } catch (error) {
     publishState({
       phase: 'error',
-      codexStatus: surface?.getSnapshot().status ?? 'error',
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -241,8 +300,10 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   if (pairingTimer) clearTimeout(pairingTimer);
   pairingTimer = null;
+  void server?.close();
+  server = null;
+  for (const runtime of hostRuntimes) void runtime.surface.close();
+  hostRuntimes = [];
   tray?.destroy();
   tray = null;
-  void remoteServer?.close();
-  void surface?.close();
 });

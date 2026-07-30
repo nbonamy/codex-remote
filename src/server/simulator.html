@@ -157,6 +157,50 @@
         font: 700 17px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
       }
 
+      .host-card {
+        grid-template-columns: 26px minmax(0, 1fr) 18px;
+      }
+
+      .host-icon {
+        position: relative;
+        width: 20px;
+        height: 20px;
+      }
+
+      .host-icon::before {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 20px;
+        height: 14px;
+        border: 1.5px solid var(--mint);
+        border-radius: 3px;
+        box-sizing: border-box;
+        content: "";
+      }
+
+      .host-icon::after {
+        position: absolute;
+        bottom: 0;
+        left: 4px;
+        width: 12px;
+        height: 6px;
+        background:
+          linear-gradient(var(--mint), var(--mint)) center top / 1.5px 5px no-repeat,
+          linear-gradient(var(--mint), var(--mint)) center bottom / 12px 1.5px no-repeat;
+        content: "";
+      }
+
+      .host-title {
+        margin-bottom: 0;
+      }
+
+      .host-chevron {
+        justify-self: end;
+        color: var(--muted);
+        font: 700 18px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
       .thread-copy {
         min-width: 0;
       }
@@ -462,7 +506,7 @@
       <header class="topbar">
         <div class="brand">
           <span class="mark">&gt;_</span>
-          <span>Codex Remote</span>
+          <span id="brand-label">Codex Remote</span>
         </div>
         <div class="connection" id="connection">
           <span class="connection-dot"></span>
@@ -494,15 +538,19 @@
       const MESSAGE_LINES_PER_PAGE = 16;
       const query = new URLSearchParams(location.search);
       const token = query.get("token") || "";
+      const hostId = query.get("hostId") || "codex";
       document.body.classList.toggle("capture-mode", query.get("capture") === "1");
       const socketProtocol = location.protocol === "https:" ? "wss:" : "ws:";
-      const socketUrl = `${socketProtocol}//${location.host}/api/v1/device?token=${encodeURIComponent(token)}`;
+      const socketUrl = `${socketProtocol}//${location.host}/api/v1/hosts/${
+        encodeURIComponent(hostId)
+      }/device?token=${encodeURIComponent(token)}`;
       const state = {
         connected: false,
         view: "threads",
-        bridges: [],
-        bridgePage: 0,
-        switchingBridge: false,
+        hosts: [],
+        hostPage: 0,
+        switchingHost: false,
+        hostName: "",
         threads: [],
         threadPage: 0,
         thread: null,
@@ -516,6 +564,7 @@
       };
 
       const screen = document.getElementById("screen");
+      const brandLabel = document.getElementById("brand-label");
       const connection = document.getElementById("connection");
       const connectionLabel = document.getElementById("connection-label");
       const buttonA = document.getElementById("button-a");
@@ -536,7 +585,7 @@
       let playbackCursor = 0;
 
       function connect() {
-        if (state.switchingBridge) return;
+        if (state.switchingHost) return;
         if (!token) {
           showToast("Missing simulator token. Open this page from the Electron app.");
           return;
@@ -553,9 +602,9 @@
         socket.addEventListener("close", () => {
           state.connected = false;
           connection.classList.remove("online");
-          connectionLabel.textContent = state.switchingBridge ? "Choose host" : "Retrying";
+          connectionLabel.textContent = state.switchingHost ? "Choose host" : "Retrying";
           render();
-          if (!state.switchingBridge) window.setTimeout(connect, 1500);
+          if (!state.switchingHost) window.setTimeout(connect, 1500);
         });
         socket.addEventListener("message", (event) => {
           if (typeof event.data !== "string") {
@@ -565,6 +614,7 @@
           const message = JSON.parse(event.data);
           if (message.type === "hello") {
             state.transcription = message.transcription;
+            state.hostName = message.hostName || "";
           } else if (message.type === "threads") {
             state.threads = message.threads;
             state.threadPage = Math.min(state.threadPage, lastThreadPage());
@@ -603,24 +653,26 @@
       }
 
       function render() {
+        brandLabel.textContent = state.view === "hosts"
+          ? "Codex Remote"
+          : state.hostName || "Codex Remote";
         connection.classList.toggle("online", state.connected);
         if (state.view === "threads") {
           controls.classList.remove("single");
           buttonB.hidden = false;
           renderThreads();
           buttonALabel.textContent = "New thread";
-          buttonBLabel.textContent = "Bridges";
+          buttonBLabel.textContent = "Hosts";
         } else if (state.view === "thread") {
           controls.classList.add("single");
           buttonB.hidden = true;
           renderConversation();
           buttonALabel.textContent = state.recording ? "Release" : "Hold to talk";
         } else {
-          controls.classList.remove("single");
-          buttonB.hidden = false;
-          renderBridges();
+          controls.classList.add("single");
+          buttonB.hidden = true;
+          renderHosts();
           buttonALabel.textContent = "Refresh";
-          buttonBLabel.textContent = "Back";
         }
         recordingOverlay.classList.toggle("visible", state.recording);
       }
@@ -660,37 +712,35 @@
         return `${first}–${last} of ${state.threads.length} threads`;
       }
 
-      function renderBridges() {
-        const start = state.bridgePage * THREADS_PER_PAGE;
-        const entries = state.bridges.slice(start, start + THREADS_PER_PAGE);
+      function renderHosts() {
+        const start = state.hostPage * THREADS_PER_PAGE;
+        const entries = state.hosts.slice(start, start + THREADS_PER_PAGE);
         screen.innerHTML = `
-          <p class="eyebrow">${bridgePageLabel()}</p>
+          <p class="eyebrow">${hostPageLabel()}</p>
           <div class="thread-list">
-            ${entries.map((bridge, visibleIndex) => `
-              <article class="thread-card" data-bridge-index="${start + visibleIndex}">
-                <span class="thread-icon">${bridge.paired ? "•" : "+"}</span>
+            ${entries.map((host, visibleIndex) => `
+              <article class="thread-card host-card" data-host-index="${start + visibleIndex}">
+                <span class="host-icon" aria-hidden="true"></span>
                 <div class="thread-copy">
-                  <div class="thread-title">${escapeHtml(bridge.name)}</div>
-                  <div class="thread-preview">${bridge.paired ? "Paired · tap to connect" : "New · tap to pair"}</div>
+                  <div class="thread-title host-title">${escapeHtml(host.name)}</div>
                 </div>
-                <span class="thread-age">${bridge.selected ? "active" : ""}</span>
+                <span class="host-chevron" aria-hidden="true">›</span>
               </article>
             `).join("")}
           </div>
-          ${entries.length <= 1 ? '<div class="empty">The browser cannot scan mDNS. The ESP32 will show every bridge on your Wi-Fi.</div>' : ""}
         `;
-        screen.querySelectorAll("[data-bridge-index]").forEach((element) => {
+        screen.querySelectorAll("[data-host-index]").forEach((element) => {
           element.addEventListener("click", () => {
-            selectSimulatorBridge(Number(element.dataset.bridgeIndex));
+            selectSimulatorHost(Number(element.dataset.hostIndex));
           });
         });
       }
 
-      function bridgePageLabel() {
-        if (state.bridges.length === 0) return "No bridges found";
-        const first = state.bridgePage * THREADS_PER_PAGE + 1;
-        const last = Math.min(state.bridges.length, first + THREADS_PER_PAGE - 1);
-        return `${first}–${last} of ${state.bridges.length} bridges`;
+      function hostPageLabel() {
+        if (state.hosts.length === 0) return "No hosts found";
+        const first = state.hostPage * THREADS_PER_PAGE + 1;
+        const last = Math.min(state.hosts.length, first + THREADS_PER_PAGE - 1);
+        return `${first}–${last} of ${state.hosts.length} hosts`;
       }
 
       function renderConversation() {
@@ -836,12 +886,12 @@
           render();
           return;
         }
-        if (state.view === "bridges") {
+        if (state.view === "hosts") {
           const lastPage = Math.max(
             0,
-            Math.ceil(state.bridges.length / THREADS_PER_PAGE) - 1,
+            Math.ceil(state.hosts.length / THREADS_PER_PAGE) - 1,
           );
-          state.bridgePage = Math.min(lastPage, state.bridgePage + 1);
+          state.hostPage = Math.min(lastPage, state.hostPage + 1);
           render();
           return;
         }
@@ -863,8 +913,8 @@
           render();
           return;
         }
-        if (state.view === "bridges") {
-          state.bridgePage = Math.max(0, state.bridgePage - 1);
+        if (state.view === "hosts") {
+          state.hostPage = Math.max(0, state.hostPage - 1);
           render();
           return;
         }
@@ -888,49 +938,40 @@
         render();
       }
 
-      async function loadBridgeInfo() {
+      async function loadHosts() {
         try {
-          const response = await fetch("/api/v1/pairing/info", {
+          const response = await fetch(`/api/v1/hosts?token=${encodeURIComponent(token)}`, {
             cache: "no-store",
           });
-          if (!response.ok) throw new Error("Bridge info unavailable");
-          const bridge = await response.json();
-          state.bridges = [{
-            id: bridge.bridgeId,
-            name: bridge.bridgeName,
-            paired: true,
-            selected: true,
-          }];
+          if (!response.ok) throw new Error("Host list unavailable");
+          const result = await response.json();
+          state.hosts = result.hosts || [];
         } catch (error) {
           showToast(error instanceof Error ? error.message : String(error));
         }
         render();
       }
 
-      function showBridgeSelector() {
+      function showHostSelector() {
         if (state.view !== "threads") return;
-        state.switchingBridge = true;
-        state.view = "bridges";
-        state.bridgePage = 0;
+        state.switchingHost = true;
+        state.view = "hosts";
+        state.hostName = "";
+        state.hostPage = 0;
+        state.connected = false;
+        connectionLabel.textContent = "Choose host";
         socket?.close();
-        void loadBridgeInfo();
+        void loadHosts();
         render();
       }
 
-      function closeBridgeSelector() {
-        if (state.view !== "bridges") return;
-        state.switchingBridge = false;
-        state.view = "threads";
-        connect();
-        render();
-      }
-
-      function selectSimulatorBridge(index) {
-        const bridge = state.bridges[index];
-        if (!bridge) return;
-        // This page is served by one bridge, while the ESP32 discovers all of
-        // them over mDNS and stores a credential for each.
-        closeBridgeSelector();
+      function selectSimulatorHost(index) {
+        const host = state.hosts[index];
+        if (!host) return;
+        const target = new URL("/simulator", location.origin);
+        target.searchParams.set("token", token);
+        target.searchParams.set("hostId", host.id);
+        window.location.assign(target);
       }
 
       function createThread() {
@@ -1078,11 +1119,10 @@
 
       buttonA.addEventListener("click", () => {
         if (state.view === "threads") createThread();
-        else if (state.view === "bridges") void loadBridgeInfo();
+        else if (state.view === "hosts") void loadHosts();
       });
       buttonB.addEventListener("click", () => {
-        if (state.view === "threads") showBridgeSelector();
-        else if (state.view === "bridges") closeBridgeSelector();
+        if (state.view === "threads") showHostSelector();
       });
       buttonA.addEventListener("pointerdown", (event) => {
         if (state.view !== "thread") return;
@@ -1139,9 +1179,6 @@
           if (state.view === "thread") {
             event.preventDefault();
             backToThreads();
-          } else if (state.view === "bridges") {
-            event.preventDefault();
-            closeBridgeSelector();
           }
         } else if (event.code === "Space" && state.view === "thread") {
           event.preventDefault();
@@ -1156,7 +1193,7 @@
       });
 
       render();
-      void loadBridgeInfo();
+      void loadHosts();
       connect();
     </script>
   </body>

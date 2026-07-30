@@ -47,9 +47,19 @@ export type RemoteServerInfo = {
   realtimeVoiceAvailable: boolean;
 };
 
-export type RemoteServerOptions = {
+export type RemoteCodexHost = {
+  id: string;
+  name: string;
   surface: CodexSurface;
+  realtimeVoiceAvailable?: () => boolean;
+};
+
+export type RemoteServerOptions = {
+  hosts?: RemoteCodexHost[];
+  surface?: CodexSurface;
   token: string;
+  hostId?: string;
+  hostName?: string;
   defaultCwd: string;
   simulatorHtml: string;
   host?: string;
@@ -82,6 +92,7 @@ type DeviceRealtime = {
 
 type DeviceSession = {
   socket: WebSocket;
+  host: RemoteCodexHost;
   threadId: string | null;
   audio: AudioCapture | null;
   realtime: DeviceRealtime | null;
@@ -97,22 +108,36 @@ export class CodexRemoteServer {
   });
   private readonly sessions = new Set<DeviceSession>();
   private readonly conversationBroadcastTimers = new Map<string, NodeJS.Timeout>();
-  private readonly unsubscribeSurfaceState: () => void;
-  private readonly unsubscribeSurfaceEvents: () => void;
+  private readonly hosts: RemoteCodexHost[];
+  private readonly unsubscribeHostListeners: Array<() => void> = [];
   private bonjour: Bonjour | null = null;
   private mdnsService: ReturnType<Bonjour['publish']> | null = null;
   private info: RemoteServerInfo | null = null;
-  private realtimeStartupError: string | null = null;
+  private readonly realtimeStartupErrors = new Map<string, string>();
 
   constructor(private readonly options: RemoteServerOptions) {
     if (!options.token.trim()) throw new Error('A non-empty device token is required');
+    this.hosts = options.hosts ?? (options.surface
+      ? [{
+          id: options.hostId?.trim() || 'codex',
+          name: options.hostName?.trim() || 'Codex',
+          surface: options.surface,
+          realtimeVoiceAvailable: options.realtimeVoiceAvailable,
+        }]
+      : []);
+    if (this.hosts.length === 0) throw new Error('At least one Codex host is required');
+    if (new Set(this.hosts.map((host) => host.id)).size !== this.hosts.length) {
+      throw new Error('Codex host ids must be unique');
+    }
     this.httpServer = http.createServer((request, response) => {
       void this.handleHttp(request, response);
     });
     this.httpServer.on('upgrade', (request, socket, head) => {
       const requestUrl = request.url ? new URL(request.url, 'http://localhost') : null;
+      const host = requestUrl ? this.deviceHost(requestUrl.pathname) : null;
       if (
-        requestUrl?.pathname !== '/api/v1/device'
+        !requestUrl
+        || !host
         || !this.isAuthorized(request, requestUrl, true)
       ) {
         socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
@@ -120,14 +145,19 @@ export class CodexRemoteServer {
         return;
       }
       this.wsServer.handleUpgrade(request, socket, head, (webSocket) => {
-        this.wsServer.emit('connection', webSocket, request);
+        this.attachDevice(webSocket, host);
       });
     });
-    this.wsServer.on('connection', (socket) => this.attachDevice(socket));
-    this.unsubscribeSurfaceState = options.surface.onStateChange(() => this.broadcastThreads());
-    this.unsubscribeSurfaceEvents = options.surface.onEvent((event) => {
-      if ('conversationId' in event) this.scheduleConversationBroadcast(event.conversationId);
-    });
+    for (const host of this.hosts) {
+      this.unsubscribeHostListeners.push(
+        host.surface.onStateChange(() => this.broadcastThreads(host.id)),
+        host.surface.onEvent((event) => {
+          if ('conversationId' in event) {
+            this.scheduleConversationBroadcast(host.id, event.conversationId);
+          }
+        }),
+      );
+    }
   }
 
   async start(): Promise<RemoteServerInfo> {
@@ -162,8 +192,10 @@ export class CodexRemoteServer {
       defaultCwd: this.options.defaultCwd,
       localUrl,
       networkUrls,
-      simulatorUrl: `${localUrl}/simulator?token=${encodeURIComponent(this.options.token)}`,
-      realtimeVoiceAvailable: this.isRealtimeVoiceAvailable(),
+      simulatorUrl: `${localUrl}/simulator?token=${
+        encodeURIComponent(this.options.token)
+      }&hostId=${encodeURIComponent(this.hosts[0]!.id)}`,
+      realtimeVoiceAvailable: this.hosts.some((host) => this.isRealtimeVoiceAvailable(host)),
     };
 
     if (this.options.advertise !== false && port !== 0) {
@@ -175,7 +207,7 @@ export class CodexRemoteServer {
         port,
         txt: {
           api: String(API_VERSION),
-          path: '/api/v1/device',
+          path: '/api/v1/hosts/{hostId}/device',
           ...(this.options.pairing
             ? {
                 bridgeId: this.options.pairing.bridgeId,
@@ -194,13 +226,12 @@ export class CodexRemoteServer {
     return {
       ...this.info,
       networkUrls: [...this.info.networkUrls],
-      realtimeVoiceAvailable: this.isRealtimeVoiceAvailable(),
+      realtimeVoiceAvailable: this.hosts.some((host) => this.isRealtimeVoiceAvailable(host)),
     };
   }
 
   async close(): Promise<void> {
-    this.unsubscribeSurfaceState();
-    this.unsubscribeSurfaceEvents();
+    for (const unsubscribe of this.unsubscribeHostListeners.splice(0)) unsubscribe();
     for (const timer of this.conversationBroadcastTimers.values()) clearTimeout(timer);
     this.conversationBroadcastTimers.clear();
     await Promise.all([...this.sessions].map(async (session) => {
@@ -231,6 +262,7 @@ export class CodexRemoteServer {
           ok: true,
           service: 'codex-remote',
           apiVersion: API_VERSION,
+          hostCount: this.hosts.length,
         });
         return;
       }
@@ -313,6 +345,17 @@ export class CodexRemoteServer {
         return;
       }
 
+      if (request.method === 'GET' && url.pathname === '/api/v1/hosts') {
+        sendJson(response, 200, {
+          hosts: this.hosts.map((host) => ({
+            id: host.id,
+            name: host.name,
+            status: host.surface.getSnapshot().status,
+          })),
+        });
+        return;
+      }
+
       if (!url.pathname.startsWith('/api/v1/') || !this.isAuthorized(request, url, true)) {
         sendJson(response, url.pathname.startsWith('/api/v1/') ? 401 : 404, {
           error: url.pathname.startsWith('/api/v1/') ? 'Unauthorized' : 'Not found',
@@ -320,57 +363,66 @@ export class CodexRemoteServer {
         return;
       }
 
-      if (request.method === 'GET' && url.pathname === '/api/v1/state') {
-        const snapshot = this.options.surface.getSnapshot();
+      const route = this.hostRoute(url.pathname);
+      if (!route) {
+        sendJson(response, 404, { error: 'Unknown host or route' });
+        return;
+      }
+      const { host, path } = route;
+
+      if (request.method === 'GET' && path === '/state') {
+        const snapshot = host.surface.getSnapshot();
         sendJson(response, 200, {
           status: snapshot.status,
           account: snapshot.authentication.account?.type ?? null,
           threadCount: snapshot.conversations.length,
           defaultCwd: this.options.defaultCwd,
-          realtimeVoiceAvailable: this.isRealtimeVoiceAvailable(),
+          realtimeVoiceAvailable: this.isRealtimeVoiceAvailable(host),
+          hostId: host.id,
+          hostName: host.name,
         });
         return;
       }
 
-      if (request.method === 'GET' && url.pathname === '/api/v1/threads') {
-        const threads = await this.options.surface.listConversations({ limit: 30 });
+      if (request.method === 'GET' && path === '/threads') {
+        const threads = await host.surface.listConversations({ limit: 30 });
         sendJson(response, 200, { threads: toDeviceThreads(threads) });
         return;
       }
 
-      if (request.method === 'POST' && url.pathname === '/api/v1/threads') {
+      if (request.method === 'POST' && path === '/threads') {
         const body = await readJsonBody(request);
-        const snapshot = await this.options.surface.createConversation({
+        const snapshot = await host.surface.createConversation({
           cwd: this.options.defaultCwd,
         });
         const threadId = snapshot.activeConversationId;
         if (!threadId) throw new Error('Codex did not return a new thread id');
         const prompt = recordString(body, 'text', false);
-        if (prompt) await this.sendPrompt(threadId, prompt);
-        sendJson(response, 201, await this.threadPayload(threadId));
+        if (prompt) await this.sendPrompt(host, threadId, prompt);
+        sendJson(response, 201, await this.threadPayload(host, threadId));
         return;
       }
 
-      const messageMatch = url.pathname.match(/^\/api\/v1\/threads\/([^/]+)\/messages$/);
+      const messageMatch = path.match(/^\/threads\/([^/]+)\/messages$/);
       if (messageMatch) {
         const threadId = decodeURIComponent(messageMatch[1]!);
         if (request.method === 'GET') {
-          sendJson(response, 200, await this.threadPayload(threadId));
+          sendJson(response, 200, await this.threadPayload(host, threadId));
           return;
         }
         if (request.method === 'POST') {
           const body = await readJsonBody(request);
           const prompt = recordString(body, 'text', true);
-          await this.sendPrompt(threadId, prompt);
-          sendJson(response, 202, await this.threadPayload(threadId));
+          await this.sendPrompt(host, threadId, prompt);
+          sendJson(response, 202, await this.threadPayload(host, threadId));
           return;
         }
       }
 
-      const interruptMatch = url.pathname.match(/^\/api\/v1\/threads\/([^/]+)\/interrupt$/);
+      const interruptMatch = path.match(/^\/threads\/([^/]+)\/interrupt$/);
       if (request.method === 'POST' && interruptMatch) {
         const threadId = decodeURIComponent(interruptMatch[1]!);
-        await this.options.surface.conversation(threadId).interrupt();
+        await host.surface.conversation(threadId).interrupt();
         sendJson(response, 202, { ok: true });
         return;
       }
@@ -408,9 +460,10 @@ export class CodexRemoteServer {
       && safeTokenEquals(url.searchParams.get('token') ?? '', this.options.token);
   }
 
-  private attachDevice(socket: WebSocket): void {
+  private attachDevice(socket: WebSocket, host: RemoteCodexHost): void {
     const session: DeviceSession = {
       socket,
+      host,
       threadId: null,
       audio: null,
       realtime: null,
@@ -422,7 +475,9 @@ export class CodexRemoteServer {
       type: 'hello',
       apiVersion: API_VERSION,
       platform: process.platform,
-      transcription: this.isRealtimeVoiceAvailable() || this.options.transcribeAudio
+      hostId: host.id,
+      hostName: host.name,
+      transcription: this.isRealtimeVoiceAvailable(host) || this.options.transcribeAudio
         ? 'available'
         : 'unavailable',
     });
@@ -462,7 +517,7 @@ export class CodexRemoteServer {
           this.sendThreads(session);
           return;
         case 'create_thread': {
-          const snapshot = await this.options.surface.createConversation({
+          const snapshot = await session.host.surface.createConversation({
             cwd: this.options.defaultCwd,
           });
           const threadId = snapshot.activeConversationId;
@@ -470,7 +525,7 @@ export class CodexRemoteServer {
           if (session.threadId !== threadId) await this.releaseRealtime(session);
           session.threadId = threadId;
           await this.sendThread(session, threadId);
-          this.broadcastThreads();
+          this.broadcastThreads(session.host.id);
           return;
         }
         case 'open_thread':
@@ -482,14 +537,14 @@ export class CodexRemoteServer {
           const threadId = command.threadId ?? session.threadId;
           if (!threadId) throw new Error('Open a thread before sending a command');
           session.threadId = threadId;
-          await this.sendPrompt(threadId, command.text);
+          await this.sendPrompt(session.host, threadId, command.text);
           await this.sendThread(session, threadId);
           return;
         }
         case 'interrupt': {
           const threadId = command.threadId ?? session.threadId;
           if (!threadId) throw new Error('Open a thread before interrupting it');
-          await this.options.surface.conversation(threadId).interrupt();
+          await session.host.surface.conversation(threadId).interrupt();
           return;
         }
         case 'audio_start': {
@@ -499,16 +554,20 @@ export class CodexRemoteServer {
           session.threadId = threadId;
           const sampleRate = command.sampleRate ?? REALTIME_SAMPLE_RATE;
           let realtime: DeviceRealtime | null = null;
-          const realtimeVoiceAvailable = this.isRealtimeVoiceAvailable();
+          const realtimeVoiceAvailable = this.isRealtimeVoiceAvailable(session.host);
           if (!realtimeVoiceAvailable && session.realtime) {
             await this.releaseRealtime(session);
           }
-          if (realtimeVoiceAvailable && !this.realtimeStartupError) {
+          const realtimeStartupError = this.realtimeStartupErrors.get(session.host.id);
+          if (realtimeVoiceAvailable && !realtimeStartupError) {
             try {
               realtime = await this.ensureRealtime(session, threadId);
             } catch (error) {
               if (!this.options.transcribeAudio) throw error;
-              this.realtimeStartupError = error instanceof Error ? error.message : String(error);
+              this.realtimeStartupErrors.set(
+                session.host.id,
+                error instanceof Error ? error.message : String(error),
+              );
             }
           }
           if (realtime) {
@@ -525,7 +584,7 @@ export class CodexRemoteServer {
           } else {
             if (!this.options.transcribeAudio) {
               throw new Error(
-                this.realtimeStartupError
+                this.realtimeStartupErrors.get(session.host.id)
                   ?? (
                     realtimeVoiceAvailable
                       ? 'Speech transcription is unavailable'
@@ -614,7 +673,7 @@ export class CodexRemoteServer {
         status: 'sending',
         detail: 'Sending transcript to Codex',
       });
-      await this.sendPrompt(session.threadId, text);
+      await this.sendPrompt(session.host, session.threadId, text);
       return;
     }
     const realtime = session.realtime;
@@ -648,7 +707,7 @@ export class CodexRemoteServer {
   ): Promise<DeviceRealtime> {
     if (session.realtime?.threadId === threadId) return session.realtime;
     await this.releaseRealtime(session);
-    const conversation = this.options.surface.conversation(threadId);
+    const conversation = session.host.surface.conversation(threadId);
     await ensureConversationLoaded(conversation);
     let peer: RemoteRealtimePeer | null = null;
     try {
@@ -693,8 +752,8 @@ export class CodexRemoteServer {
     }
   }
 
-  private isRealtimeVoiceAvailable(): boolean {
-    return this.options.realtimeVoiceAvailable?.() ?? true;
+  private isRealtimeVoiceAvailable(host: RemoteCodexHost): boolean {
+    return host.realtimeVoiceAvailable?.() ?? true;
   }
 
   private handleRealtimeEvent(
@@ -758,19 +817,26 @@ export class CodexRemoteServer {
     }
   }
 
-  private async sendPrompt(threadId: string, prompt: string): Promise<void> {
+  private async sendPrompt(
+    host: RemoteCodexHost,
+    threadId: string,
+    prompt: string,
+  ): Promise<void> {
     const text = prompt.trim();
     if (!text) throw new Error('text must be a non-empty string');
     if (text.length > MAX_PROMPT_CHARS) throw new Error('text is too long');
-    const conversation = this.options.surface.conversation(threadId);
+    const conversation = host.surface.conversation(threadId);
     await ensureConversationLoaded(conversation);
     await conversation.sendMessage(text);
   }
 
-  private async threadPayload(threadId: string): Promise<{
+  private async threadPayload(
+    host: RemoteCodexHost,
+    threadId: string,
+  ): Promise<{
     thread: ReturnType<typeof toDeviceThreadState>;
   }> {
-    const conversation = this.options.surface.conversation(threadId);
+    const conversation = host.surface.conversation(threadId);
     const snapshot = await loadConversationSnapshot(conversation);
     return {
       thread: toDeviceThreadState(snapshot, threadId),
@@ -778,30 +844,37 @@ export class CodexRemoteServer {
   }
 
   private sendThreads(session: DeviceSession): void {
-    const snapshot = this.options.surface.getSnapshot();
+    const snapshot = session.host.surface.getSnapshot();
     this.send(session, {
       type: 'threads',
       threads: toDeviceThreads(snapshot.conversations),
     });
   }
 
-  private broadcastThreads(): void {
-    for (const session of this.sessions) this.sendThreads(session);
+  private broadcastThreads(hostId: string): void {
+    for (const session of this.sessions) {
+      if (session.host.id === hostId) this.sendThreads(session);
+    }
   }
 
-  private scheduleConversationBroadcast(threadId: string): void {
-    if (this.conversationBroadcastTimers.has(threadId)) return;
+  private scheduleConversationBroadcast(hostId: string, threadId: string): void {
+    const key = `${hostId}:${threadId}`;
+    if (this.conversationBroadcastTimers.has(key)) return;
     const timer = setTimeout(() => {
-      this.conversationBroadcastTimers.delete(threadId);
-      void this.broadcastConversation(threadId);
+      this.conversationBroadcastTimers.delete(key);
+      void this.broadcastConversation(hostId, threadId);
     }, 80);
-    this.conversationBroadcastTimers.set(threadId, timer);
+    this.conversationBroadcastTimers.set(key, timer);
   }
 
-  private async broadcastConversation(threadId: string): Promise<void> {
-    const matching = [...this.sessions].filter((session) => session.threadId === threadId);
+  private async broadcastConversation(hostId: string, threadId: string): Promise<void> {
+    const host = this.hosts.find((candidate) => candidate.id === hostId);
+    if (!host) return;
+    const matching = [...this.sessions].filter((session) => (
+      session.host.id === hostId && session.threadId === threadId
+    ));
     if (matching.length === 0) return;
-    const conversation = this.options.surface.conversation(threadId);
+    const conversation = host.surface.conversation(threadId);
     try {
       const snapshot = await loadConversationSnapshot(conversation);
       const message: DeviceServerMessage = {
@@ -815,7 +888,7 @@ export class CodexRemoteServer {
   }
 
   private async sendThread(session: DeviceSession, threadId: string): Promise<void> {
-    const payload = await this.threadPayload(threadId);
+    const payload = await this.threadPayload(session.host, threadId);
     this.send(session, { type: 'thread', thread: payload.thread });
   }
 
@@ -830,6 +903,37 @@ export class CodexRemoteServer {
       type: 'error',
       message: error instanceof Error ? error.message : String(error),
     });
+  }
+
+  private deviceHost(pathname: string): RemoteCodexHost | null {
+    const match = pathname.match(/^\/api\/v1\/hosts\/([^/]+)\/device$/);
+    if (!match) return null;
+    const hostId = decodedPathSegment(match[1]!);
+    return hostId
+      ? this.hosts.find((host) => host.id === hostId) ?? null
+      : null;
+  }
+
+  private hostRoute(pathname: string): {
+    host: RemoteCodexHost;
+    path: string;
+  } | null {
+    const match = pathname.match(/^\/api\/v1\/hosts\/([^/]+)(\/.*)$/);
+    if (!match) return null;
+    const hostId = decodedPathSegment(match[1]!);
+    if (!hostId) return null;
+    const host = this.hosts.find(
+      (candidate) => candidate.id === hostId,
+    );
+    return host ? { host, path: match[2]! } : null;
+  }
+}
+
+function decodedPathSegment(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
   }
 }
 

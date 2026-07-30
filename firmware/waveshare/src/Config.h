@@ -30,7 +30,6 @@ constexpr const char *WIFI_PASSWORD = CODEX_REMOTE_WIFI_PASSWORD;
 constexpr const char *DEVICE_TOKEN = CODEX_REMOTE_DEVICE_TOKEN;
 constexpr const char *SERVER_HOST = CODEX_REMOTE_SERVER_HOST;
 constexpr int SERVER_PORT = CODEX_REMOTE_SERVER_PORT;
-constexpr const char *SERVER_PATH = "/api/v1/device";
 
 constexpr int WIFI_CONNECT_TIMEOUT_SEC = 15;
 constexpr unsigned long RECONNECT_INTERVAL_MS = 3000;

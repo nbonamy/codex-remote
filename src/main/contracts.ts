@@ -1,8 +1,16 @@
-export type CodexRemoteDesktopState = {
-  phase: 'starting' | 'ready' | 'error';
+export type CodexRemoteHostState = {
+  id: string;
+  name: string;
+  codexHome: string;
   codexStatus: 'idle' | 'connecting' | 'ready' | 'error';
   accountLabel: string | null;
   error: string | null;
+};
+
+export type CodexRemoteDesktopState = {
+  phase: 'starting' | 'ready' | 'error';
+  error: string | null;
+  hosts: CodexRemoteHostState[];
   pairingOpenUntil: number | null;
   pairedDeviceCount: number;
   pendingPairings: Array<{

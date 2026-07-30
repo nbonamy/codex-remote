@@ -23,6 +23,9 @@ struct RemoteMessage {
 struct RemoteBridge {
   String id;
   String name;
+  String routerId;
+  String routerName;
+  String hostId;
   String host;
   int port;
   bool paired;
@@ -60,6 +63,7 @@ public:
   bool pairingPending() const { return _pairingPending; }
   const String &pairingCode() const { return _pairingCode; }
   const String &selectedBridgeName() const { return _selectedBridgeName; }
+  const String &selectedHostName() const { return _selectedHostName; }
 
   bool createThread();
   bool openThread(const String &threadId);
@@ -70,7 +74,6 @@ public:
   bool interrupt(const String &threadId);
   void clearActiveThread();
   void beginBridgeSelection();
-  void cancelBridgeSelection();
   bool refreshBridges();
   bool selectBridge(int index);
 
@@ -103,6 +106,10 @@ private:
   String _deviceName;
   String _selectedBridgeId;
   String _selectedBridgeName;
+  String _selectedRouterId;
+  String _selectedRouterName;
+  String _selectedHostId;
+  String _selectedHostName;
   String _currentToken;
   String _pairingRequestId;
   String _pairingCode;
@@ -115,6 +122,10 @@ private:
   void configureWebSocket();
   void disconnect();
   bool resolveSelectedBridge();
+  bool applySelectedBridge(const RemoteBridge &bridge);
+  bool appendHostsForBridge(const String &routerId,
+                            const String &routerName,
+                            const String &serverHost, int serverPort);
   bool startPairing();
   void pollPairing();
   String tokenForBridge(const String &bridgeId) const;
