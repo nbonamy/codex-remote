@@ -259,25 +259,57 @@ bool RemoteClient::resolveSelectedBridge() {
 }
 
 void RemoteClient::beginBridgeSelection() {
-  disconnect();
   _selectingBridge = true;
   _pairingPending = false;
   _pairingRequestId = "";
   _pairingCode = "";
-  _selectedBridgeId = "";
-  _selectedBridgeName = "";
-  _selectedRouterId = "";
-  _selectedRouterName = "";
-  _selectedHostId = "";
-  _selectedHostName = "";
-  _currentToken = "";
-  saveSelectedBridge();
   _error = "";
   _status = "Discovering hosts";
   changed();
   refreshBridges();
   _status = _bridgeCount > 0 ? "Choose a host" : "No hosts found";
   changed();
+}
+
+void RemoteClient::cancelPairing() {
+  if (!_pairingPending) {
+    return;
+  }
+  _pairingPending = false;
+  _pairingRequestId = "";
+  _pairingCode = "";
+  _selectingBridge = true;
+  _error = "";
+  _status = "Choose a host";
+  changed();
+  refreshBridges();
+}
+
+void RemoteClient::endBridgeSelection() {
+  _pairingPending = false;
+  _pairingRequestId = "";
+  _pairingCode = "";
+  _selectingBridge = false;
+  _error = "";
+  if (_connected) {
+    _status = "Ready";
+    changed();
+    return;
+  }
+  if (_selectedBridgeId.isEmpty()) {
+    _status = "Select a host";
+    changed();
+    return;
+  }
+  connect();
+}
+
+bool RemoteClient::checkPairing() {
+  if (!_pairingPending) {
+    return false;
+  }
+  pollPairing();
+  return true;
 }
 
 bool RemoteClient::selectBridge(int index) {
@@ -576,6 +608,12 @@ bool RemoteClient::sendAudio(const uint8_t *data, size_t length) {
 bool RemoteClient::endAudio() {
   JsonDocument document;
   document["type"] = "audio_end";
+  return sendControl(document);
+}
+
+bool RemoteClient::cancelAudio() {
+  JsonDocument document;
+  document["type"] = "audio_cancel";
   return sendControl(document);
 }
 

@@ -178,6 +178,43 @@ describe('CodexRemoteServer device pairing', () => {
 });
 
 describe('CodexRemoteServer realtime voice', () => {
+  it('discards a cancelled recording without transcribing or sending it', async () => {
+    const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
+    const transcribeAudio = vi.fn(async (_wave: Buffer) => ({ text: 'must not send' }));
+    const server = new CodexRemoteServer({
+      surface: fakeSurface(conversation),
+      token: 'test-device-token',
+      defaultCwd: '/tmp/project',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+      realtimeVoiceAvailable: () => false,
+      transcribeAudio,
+    });
+    servers.push(server);
+    const info = await server.start();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/hosts/codex/device?token=test-device-token`,
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+
+    await messages.nextJson('hello');
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({
+      type: 'audio_start',
+      threadId: 'thread-1',
+      sampleRate: 24_000,
+    }));
+    expect(await messages.nextJson('status')).toMatchObject({ status: 'recording' });
+    socket.send(Buffer.alloc(4_800, 1));
+    socket.send(JSON.stringify({ type: 'audio_cancel' }));
+    expect(await messages.nextJson('status')).toMatchObject({ status: 'ready' });
+
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(conversation.sendMessage).not.toHaveBeenCalled();
+  });
+
   it('streams realtime voice directly over the app-server WebSocket without a renderer', async () => {
     const realtime = new FakeRealtimeSession('thread-1');
     const conversation = fakeConversation(realtime);

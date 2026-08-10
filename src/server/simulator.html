@@ -528,7 +528,7 @@
         <div class="recording-inner">
           <div class="record-dot"></div>
           <div class="record-label">Listening</div>
-          <div class="record-hint">Release BOOT to send</div>
+          <div class="record-hint">PWR to send · BOOT to cancel</div>
         </div>
       </div>
       <div class="toast" id="toast"></div>
@@ -659,20 +659,25 @@
         connection.classList.toggle("online", state.connected);
         if (state.view === "threads") {
           controls.classList.remove("single");
+          buttonA.hidden = false;
           buttonB.hidden = false;
           renderThreads();
-          buttonALabel.textContent = "New thread";
-          buttonBLabel.textContent = "Hosts";
+          buttonALabel.textContent = "Hosts";
+          buttonBLabel.textContent = "New thread";
         } else if (state.view === "thread") {
-          controls.classList.add("single");
-          buttonB.hidden = true;
+          controls.classList.remove("single");
+          buttonA.hidden = false;
+          buttonB.hidden = false;
           renderConversation();
-          buttonALabel.textContent = state.recording ? "Release" : "Hold to talk";
+          buttonALabel.textContent = state.recording ? "Cancel" : "Back";
+          buttonBLabel.textContent = state.recording ? "Send" : "Talk";
         } else {
-          controls.classList.add("single");
-          buttonB.hidden = true;
+          controls.classList.remove("single");
+          buttonA.hidden = false;
+          buttonB.hidden = false;
           renderHosts();
-          buttonALabel.textContent = "Refresh";
+          buttonALabel.textContent = "Back";
+          buttonBLabel.textContent = "Refresh";
         }
         recordingOverlay.classList.toggle("visible", state.recording);
       }
@@ -772,7 +777,7 @@
           return '<div class="reader-waiting">Waiting for Codex…</div>';
         }
         if (!selection) {
-          return '<div class="empty">Hold BOOT and tell Codex what to do.</div>';
+          return '<div class="empty">Press PWR, speak, then press PWR to send.</div>';
         }
         const role = selection.message.role === "user" ? "You" : "Codex";
         const continuation = selection.page > 0 ? " · continued" : "";
@@ -965,6 +970,16 @@
         render();
       }
 
+      function backFromHostSelector() {
+        if (state.view !== "hosts") return;
+        state.switchingHost = false;
+        state.view = "threads";
+        state.hostPage = 0;
+        connectionLabel.textContent = "Retrying";
+        connect();
+        render();
+      }
+
       function selectSimulatorHost(index) {
         const host = state.hosts[index];
         if (!host) return;
@@ -1039,6 +1054,24 @@
 
       function stopTalk() {
         if (!state.recording) return;
+        stopLocalRecording();
+        state.responseBaselineId = latestAssistantId();
+        state.readerMessageId = null;
+        state.readerPage = 0;
+        state.awaitingResponse = true;
+        send({ type: "audio_end" });
+        render();
+      }
+
+      function cancelTalk() {
+        if (!state.recording) return;
+        stopLocalRecording();
+        state.awaitingResponse = false;
+        send({ type: "audio_cancel" });
+        render();
+      }
+
+      function stopLocalRecording() {
         state.recording = false;
         audioProcessor?.disconnect();
         audioSource?.disconnect();
@@ -1048,12 +1081,6 @@
         audioContext = null;
         audioSource = null;
         audioProcessor = null;
-        state.responseBaselineId = latestAssistantId();
-        state.readerMessageId = null;
-        state.readerPage = 0;
-        state.awaitingResponse = true;
-        send({ type: "audio_end" });
-        render();
       }
 
       function downsampleToPcm16(input, inputRate, outputRate) {
@@ -1118,24 +1145,17 @@
       }
 
       buttonA.addEventListener("click", () => {
-        if (state.view === "threads") createThread();
-        else if (state.view === "hosts") void loadHosts();
+        if (state.view === "threads") showHostSelector();
+        else if (state.view === "hosts") backFromHostSelector();
+        else if (state.recording) cancelTalk();
+        else backToThreads();
       });
       buttonB.addEventListener("click", () => {
-        if (state.view === "threads") showHostSelector();
+        if (state.view === "threads") createThread();
+        else if (state.view === "hosts") void loadHosts();
+        else if (state.recording) stopTalk();
+        else void startTalk();
       });
-      buttonA.addEventListener("pointerdown", (event) => {
-        if (state.view !== "thread") return;
-        event.preventDefault();
-        buttonA.setPointerCapture(event.pointerId);
-        void startTalk();
-      });
-      buttonA.addEventListener("pointerup", (event) => {
-        if (state.view !== "thread") return;
-        event.preventDefault();
-        stopTalk();
-      });
-      buttonA.addEventListener("pointercancel", stopTalk);
 
       let gestureStart = null;
       let suppressScreenTap = false;
@@ -1151,8 +1171,8 @@
         if (Math.abs(dy) < 44 || Math.abs(dy) < Math.abs(dx) * 1.2) return;
         suppressScreenTap = true;
         event.preventDefault();
-        if (dy > 0) pageForward();
-        else pageBack();
+        if (dy > 0) pageBack();
+        else pageForward();
         window.setTimeout(() => {
           suppressScreenTap = false;
         }, 0);

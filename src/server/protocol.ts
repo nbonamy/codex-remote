@@ -42,7 +42,8 @@ export type DeviceClientCommand =
   | { type: 'send_text'; threadId?: string; text: string }
   | { type: 'interrupt'; threadId?: string }
   | { type: 'audio_start'; threadId?: string; sampleRate?: number }
-  | { type: 'audio_end' };
+  | { type: 'audio_end' }
+  | { type: 'audio_cancel' };
 
 export type DeviceServerMessage =
   | {
@@ -111,6 +112,7 @@ export function parseDeviceCommand(value: unknown): DeviceClientCommand {
     case 'list_threads':
     case 'create_thread':
     case 'audio_end':
+    case 'audio_cancel':
       return { type: value.type };
     case 'open_thread':
       return {

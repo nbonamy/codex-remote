@@ -21,11 +21,28 @@ constexpr uint16_t kMagenta = 0xF81F;
 constexpr uint16_t kCoral = 0xFB6D;
 constexpr uint16_t kYellow = 0xFE88;
 constexpr uint16_t kGreen = 0x07E8;
-constexpr int kThreadsPerPage = 1;
+constexpr int kThreadsPerPage = 5;
+constexpr int kThreadScrollStep = kThreadsPerPage - 1;
 constexpr int kBridgesPerPage = 4;
-constexpr int kMessageCharactersPerLine = 25;
-constexpr int kMessageLinesPerPage = 13;
+constexpr int kMessageCharactersPerLine = 18;
+constexpr int kMessageLinesPerPage = 6;
+constexpr int kMessageLineHeight = 30;
+constexpr int kMessagePositionY = 108;
+constexpr int kMessageCardY = 136;
+constexpr int kMessageCardHeight = 255;
+constexpr int kMessageHeaderCenterY = 165;
+constexpr int kMessageHeaderBaselineY = 172;
+constexpr int kMessageTextBaselineY = 213;
 constexpr int kSwipeThresholdPx = 48;
+constexpr int kNewThreadCardX = 16;
+constexpr int kNewThreadCardY = 374;
+constexpr int kNewThreadCardWidth = 336;
+constexpr int kNewThreadCardHeight = 60;
+constexpr int kThreadCardX = 16;
+constexpr int kThreadCardY = 92;
+constexpr int kThreadCardWidth = 336;
+constexpr int kThreadCardHeight = 48;
+constexpr int kThreadCardPitch = 54;
 
 void drawCenteredText(Arduino_GFX &display, const String &text, int y,
                       uint8_t size, uint16_t color) {
@@ -34,6 +51,27 @@ void drawCenteredText(Arduino_GFX &display, const String &text, int y,
   const int width = text.length() * 6 * size;
   display.setCursor(max(0, (SCREEN_WIDTH_PX - width) / 2), y);
   display.print(text);
+}
+
+String fitTextToWidth(Arduino_GFX &display, const String &text, int maxWidth) {
+  String fitted = text;
+  int16_t x1 = 0;
+  int16_t y1 = 0;
+  uint16_t width = 0;
+  uint16_t height = 0;
+  while (!fitted.isEmpty()) {
+    display.getTextBounds(fitted, 0, 0, &x1, &y1, &width, &height);
+    if (width <= maxWidth) {
+      return fitted;
+    }
+    int lastCodepoint = fitted.length() - 1;
+    while (lastCodepoint > 0 &&
+           (static_cast<uint8_t>(fitted[lastCodepoint]) & 0xC0) == 0x80) {
+      lastCodepoint--;
+    }
+    fitted.remove(lastCodepoint);
+  }
+  return fitted;
 }
 
 void drawChevron(Arduino_GFX &display, int x, int y, uint16_t color) {
@@ -149,6 +187,7 @@ bool RemoteApp::begin() {
   Board::setDisplayBrightness(DEFAULT_BRIGHTNESS);
   display.fillScreen(kBlack);
   display.setTextWrap(false);
+  display.setUTF8Print(true);
 
   if (!_audio.init()) {
     Log::client("App", "audio init failed");
@@ -186,18 +225,22 @@ void RemoteApp::update() {
 }
 
 void RemoteApp::onRemoteStateChanged() {
-  const int lastPage =
-      max(0, (_client.threadCount() + kThreadsPerPage - 1) / kThreadsPerPage - 1);
-  _threadPage = min(_threadPage, lastPage);
+  const int lastThreadOffset = max(0, _client.threadCount() - kThreadsPerPage);
+  _threadOffset = min(_threadOffset, lastThreadOffset);
   const int lastBridgePage =
       max(0, (_client.bridgeCount() + kBridgesPerPage - 1) /
                      kBridgesPerPage -
                  1);
   _bridgePage = min(_bridgePage, lastBridgePage);
+  _bridgeFocusIndex = _client.bridgeCount() == 0
+                          ? 0
+                          : constrain(_bridgeFocusIndex, 0,
+                                      _client.bridgeCount() - 1);
   if (_client.pairingPending()) {
     _view = View::Bridges;
   }
-  if (_view == View::Bridges && _client.connected()) {
+  if (_view == View::Bridges && _client.connected() &&
+      !_client.selectingBridge()) {
     _view = View::Threads;
   }
   updateReaderSelection();
@@ -219,31 +262,44 @@ void RemoteApp::onRemoteAudio(const uint8_t *data, size_t length) {
 }
 
 void RemoteApp::handleButtons() {
-  const bool buttonA = Board::buttonAIsPressed();
-  const bool buttonB = Board::buttonBIsPressed();
+  const bool boot = Board::bootButtonIsPressed();
+  const bool power = Board::powerButtonIsPressed();
+  const bool bootPressed = boot && !_bootPrevious;
+  const bool powerPressed = power && !_powerPrevious;
 
-  if (_view == View::Threads) {
-    if (buttonA && !_buttonAPrevious) {
-      createThread();
-    }
-    if (buttonB && !_buttonBPrevious) {
-      showBridges();
-    }
-  } else if (_view == View::Conversation) {
-    if (buttonA && !_buttonAPrevious) {
-      startRecording();
-    }
-    if (!buttonA && _buttonAPrevious && _recording) {
+  if (_recording) {
+    if (bootPressed) {
+      cancelRecording();
+    } else if (powerPressed) {
       stopRecording();
     }
+  } else if (_view == View::Threads) {
+    if (bootPressed) {
+      showBridges();
+    }
+    if (powerPressed) {
+      if (_client.connected()) {
+        createThread();
+      } else {
+        showBridges();
+      }
+    }
+  } else if (_view == View::Conversation) {
+    if (bootPressed) {
+      backToThreads();
+    } else if (powerPressed && !_awaitingResponse) {
+      startRecording();
+    }
   } else {
-    if (buttonA && !_buttonAPrevious && !_client.pairingPending()) {
-      _client.refreshBridges();
+    if (bootPressed) {
+      backFromBridges();
+    } else if (powerPressed) {
+      confirmBridge();
     }
   }
 
-  _buttonAPrevious = buttonA;
-  _buttonBPrevious = buttonB;
+  _bootPrevious = boot;
+  _powerPrevious = power;
 }
 
 void RemoteApp::handleTouch() {
@@ -268,9 +324,9 @@ void RemoteApp::handleTouch() {
   const int dy = _touchLastY - _touchStartY;
   if (abs(dy) >= kSwipeThresholdPx && abs(dy) > abs(dx) * 6 / 5) {
     if (dy > 0) {
-      pageForward();
-    } else {
       pageBack();
+    } else {
+      pageForward();
     }
     return;
   }
@@ -287,18 +343,26 @@ void RemoteApp::handleTap(int x, int y) {
       }
       return;
     }
-    if (x >= 28 && x < 340 && y >= 190 && y < 290) {
+    if (x >= kNewThreadCardX &&
+        x < kNewThreadCardX + kNewThreadCardWidth &&
+        y >= kNewThreadCardY &&
+        y < kNewThreadCardY + kNewThreadCardHeight) {
       createThread();
       return;
     }
-    if (y < 316 || y >= 432) {
+    if (x < kThreadCardX || x >= kThreadCardX + kThreadCardWidth ||
+        y < kThreadCardY) {
       return;
     }
-    const int visibleIndex = (y - 316) / 58;
+    const int visibleIndex = (y - kThreadCardY) / kThreadCardPitch;
     if (visibleIndex < 0 || visibleIndex >= kThreadsPerPage) {
       return;
     }
-    openThread(_threadPage * kThreadsPerPage + visibleIndex);
+    const int cardY = kThreadCardY + visibleIndex * kThreadCardPitch;
+    if (y >= cardY + kThreadCardHeight) {
+      return;
+    }
+    openThread(_threadOffset + visibleIndex);
     return;
   }
   if (_view == View::Bridges) {
@@ -309,7 +373,8 @@ void RemoteApp::handleTap(int x, int y) {
     if (visibleIndex < 0 || visibleIndex >= kBridgesPerPage) {
       return;
     }
-    _client.selectBridge(_bridgePage * kBridgesPerPage + visibleIndex);
+    _bridgeFocusIndex = _bridgePage * kBridgesPerPage + visibleIndex;
+    _client.selectBridge(_bridgeFocusIndex);
     return;
   }
   if (x < 58 && y >= 56 && y <= 112 && !_recording) {
@@ -319,9 +384,10 @@ void RemoteApp::handleTap(int x, int y) {
 
 void RemoteApp::pageForward() {
   if (_view == View::Threads) {
-    const int lastPage =
-        max(0, (_client.threadCount() + kThreadsPerPage - 1) / kThreadsPerPage - 1);
-    _threadPage = min(lastPage, _threadPage + 1);
+    const int lastThreadOffset =
+        max(0, _client.threadCount() - kThreadsPerPage);
+    _threadOffset =
+        min(lastThreadOffset, _threadOffset + kThreadScrollStep);
     _dirty = true;
     return;
   }
@@ -331,6 +397,10 @@ void RemoteApp::pageForward() {
                        kBridgesPerPage -
                    1);
     _bridgePage = min(lastPage, _bridgePage + 1);
+    _bridgeFocusIndex = _client.bridgeCount() == 0
+                            ? 0
+                            : min(_client.bridgeCount() - 1,
+                                  _bridgePage * kBridgesPerPage);
     _dirty = true;
     return;
   }
@@ -353,12 +423,24 @@ void RemoteApp::pageForward() {
 
 void RemoteApp::pageBack() {
   if (_view == View::Threads) {
-    _threadPage = max(0, _threadPage - 1);
+    const int lastThreadOffset =
+        max(0, _client.threadCount() - kThreadsPerPage);
+    if (_threadOffset == lastThreadOffset &&
+        lastThreadOffset % kThreadScrollStep != 0) {
+      _threadOffset = (lastThreadOffset / kThreadScrollStep) *
+                      kThreadScrollStep;
+    } else {
+      _threadOffset = max(0, _threadOffset - kThreadScrollStep);
+    }
     _dirty = true;
     return;
   }
   if (_view == View::Bridges) {
     _bridgePage = max(0, _bridgePage - 1);
+    _bridgeFocusIndex = _client.bridgeCount() == 0
+                            ? 0
+                            : min(_client.bridgeCount() - 1,
+                                  _bridgePage * kBridgesPerPage);
     _dirty = true;
     return;
   }
@@ -414,11 +496,47 @@ void RemoteApp::backToThreads() {
   _dirty = true;
 }
 
+void RemoteApp::backFromBridges() {
+  if (_client.pairingPending()) {
+    _client.cancelPairing();
+    _dirty = true;
+    return;
+  }
+  _client.endBridgeSelection();
+  _view = View::Threads;
+  if (_client.connected()) {
+    _client.listThreads();
+  }
+  _dirty = true;
+}
+
 void RemoteApp::showBridges() {
   _view = View::Bridges;
   _bridgePage = 0;
   _client.beginBridgeSelection();
+  _bridgeFocusIndex = 0;
+  for (int index = 0; index < _client.bridgeCount(); index++) {
+    if (_client.bridge(index).selected) {
+      _bridgeFocusIndex = index;
+      _bridgePage = index / kBridgesPerPage;
+      break;
+    }
+  }
   _dirty = true;
+}
+
+void RemoteApp::confirmBridge() {
+  if (_client.pairingPending()) {
+    _client.checkPairing();
+    return;
+  }
+  if (_client.bridgeCount() == 0) {
+    _client.refreshBridges();
+    return;
+  }
+  _bridgeFocusIndex = constrain(_bridgeFocusIndex, 0,
+                                _client.bridgeCount() - 1);
+  _client.selectBridge(_bridgeFocusIndex);
 }
 
 void RemoteApp::startRecording() {
@@ -446,6 +564,14 @@ void RemoteApp::stopRecording() {
   _readerPage = 0;
   _awaitingResponse = true;
   _client.endAudio();
+  _dirty = true;
+}
+
+void RemoteApp::cancelRecording() {
+  _recording = false;
+  _audio.stopRecording();
+  _client.cancelAudio();
+  _awaitingResponse = false;
   _dirty = true;
 }
 
@@ -550,6 +676,17 @@ void RemoteApp::handleSerialDebug() {
     }
     if (_serialCommand == "$SCREENSHOT") {
       Board::writeDisplayScreenshot(Serial);
+    } else if (_serialCommand == "$PAGE_BACK") {
+      pageBack();
+    } else if (_serialCommand == "$PAGE_FORWARD") {
+      pageForward();
+    } else if (_serialCommand.startsWith("$TAP ")) {
+      const int separator = _serialCommand.indexOf(' ', 5);
+      if (separator > 5) {
+        const int x = _serialCommand.substring(5, separator).toInt();
+        const int y = _serialCommand.substring(separator + 1).toInt();
+        handleTap(x, y);
+      }
     }
     _serialCommand = "";
   }
@@ -602,44 +739,40 @@ void RemoteApp::drawThreads() {
     display.setCursor(103, 348);
     display.print("SAME WI-FI");
     drawChevron(display, 326, 326, kMint);
-    drawFooter("PWR/TAP  CHOOSE HOST");
+    drawFooter("PWR CHOOSE HOST");
     return;
   }
 
-  drawOrb(display, SCREEN_WIDTH_PX / 2, 112, 34, false);
-  drawCenteredText(display, "READY", 154, 3, kMint);
-
-  display.fillRoundRect(28, 190, 312, 100, 18, kPanelSelected);
-  display.drawRoundRect(28, 190, 312, 100, 18, kCyan);
-  display.drawRoundRect(30, 192, 308, 96, 16, kPanelGlow);
-  drawMicrophone(display, 76, 232, kWhite);
+  const int newThreadCenterY = kNewThreadCardY + kNewThreadCardHeight / 2;
+  display.fillRoundRect(kNewThreadCardX, kNewThreadCardY,
+                        kNewThreadCardWidth, kNewThreadCardHeight, 18,
+                        kPanelSelected);
+  display.drawRoundRect(kNewThreadCardX, kNewThreadCardY,
+                        kNewThreadCardWidth, kNewThreadCardHeight, 18, kCyan);
+  display.drawRoundRect(kNewThreadCardX + 2, kNewThreadCardY + 2,
+                        kNewThreadCardWidth - 4, kNewThreadCardHeight - 4, 16,
+                        kPanelGlow);
+  display.fillCircle(46, newThreadCenterY, 19, 0x0868);
+  drawMicrophone(display, 46, newThreadCenterY - 3, kWhite);
   display.setTextSize(2);
   display.setTextColor(kWhite);
-  display.setCursor(112, 210);
+  display.setCursor(78, kNewThreadCardY + 10);
   display.print("NEW THREAD");
-  display.setTextSize(2);
   display.setTextColor(kMint);
-  display.setCursor(112, 242);
-  display.print("PRESS BOOT");
-  display.setTextColor(kMuted);
-  display.setCursor(112, 266);
-  display.print("OR TAP CARD");
+  display.setCursor(78, kNewThreadCardY + 36);
+  display.print("PRESS PWR");
+  drawChevron(display, 334, newThreadCenterY, kMint);
 
-  const int first = _threadPage * kThreadsPerPage;
+  const int first = _threadOffset;
   const int last = min(_client.threadCount(), first + kThreadsPerPage);
   display.setTextSize(2);
-  display.setTextColor(kWhite);
-  display.setCursor(18, 304);
-  display.print("RECENT");
+  display.setTextColor(kMuted);
+  display.setCursor(18, 64);
   if (_client.threadCount() == 0) {
-    display.setTextColor(kMuted);
-    display.setCursor(198, 304);
-    display.print("NONE YET");
+    display.print("NO THREADS YET");
   } else {
-    const String page = String(first + 1) + "-" + String(last) + " / " +
-                        String(_client.threadCount());
-    display.setTextColor(kMuted);
-    display.setCursor(SCREEN_WIDTH_PX - 18 - page.length() * 12, 304);
+    const String page = String(first + 1) + "-" + String(last) + " OF " +
+                        String(_client.threadCount()) + " THREADS";
     display.print(page);
   }
 
@@ -648,20 +781,20 @@ void RemoteApp::drawThreads() {
     if (index >= _client.threadCount()) {
       break;
     }
-    const int y = 330 + visible * 66;
-    display.fillRoundRect(16, y, 336, 58, 12, kPanel);
-    display.drawRoundRect(16, y, 336, 58, 12, kLine);
-    display.fillCircle(43, y + 29, 18, visible == 0 ? 0x0868 : 0x180B);
-    display.setTextColor(visible == 0 ? kCyan : kViolet);
-    display.setCursor(25, y + 20);
-    display.print("</>");
+    const int y = kThreadCardY + visible * kThreadCardPitch;
+    display.fillRoundRect(kThreadCardX, y, kThreadCardWidth,
+                          kThreadCardHeight, 10, kPanel);
+    display.drawRoundRect(kThreadCardX, y, kThreadCardWidth,
+                          kThreadCardHeight, 10, kLine);
+    display.fillCircle(36, y + 24, 13, 0x180B);
+    drawSpark(display, 36, y + 24, 7, kViolet);
+    display.setFont(u8g2_font_helvB18_tf);
+    display.setTextSize(1);
     display.setTextColor(kWhite);
-    display.setCursor(70, y + 7);
-    display.print(_client.thread(index).title.substring(0, 21));
-    display.setTextColor(kMuted);
-    display.setCursor(70, y + 32);
-    display.print(_client.thread(index).preview.substring(0, 21));
-    drawChevron(display, 334, y + 29, kMint);
+    display.setCursor(58, y + 34);
+    display.print(fitTextToWidth(display, _client.thread(index).title, 260));
+    display.setFont();
+    drawChevron(display, 336, y + 24, kMint);
   }
 }
 
@@ -681,7 +814,7 @@ void RemoteApp::drawBridges() {
     display.setCursor((SCREEN_WIDTH_PX - codeWidth) / 2, 258);
     display.print(_client.pairingCode().substring(0, 6));
     drawCenteredText(display, "APPROVE IN MAC MENU", 318, 2, kMuted);
-    drawFooter("CODES MUST MATCH");
+    drawFooter("PWR CHECK  BOOT CANCEL");
     return;
   }
 
@@ -704,7 +837,7 @@ void RemoteApp::drawBridges() {
     display.print("OPEN MAC APP");
     display.setCursor(103, 336);
     display.print(WiFi.localIP().toString());
-    drawFooter("BOOT  REFRESH HOSTS");
+    drawFooter("PWR REFRESH  BOOT BACK");
     return;
   }
 
@@ -727,7 +860,9 @@ void RemoteApp::drawBridges() {
     display.fillRoundRect(16, y, 336, 58, 13, kPanel);
     display.drawRoundRect(
         16, y, 336, 58, 13,
-        bridge.selected ? kCyan : (bridge.paired ? kPanelGlow : kLine));
+        index == _bridgeFocusIndex
+            ? kCyan
+            : (bridge.paired ? kPanelGlow : kLine));
     const uint16_t iconColor = bridge.paired ? kMint : kMuted;
     display.fillCircle(48, y + 29, 21, bridge.paired ? 0x0868 : 0x1083);
     drawHostIcon(display, 48, y + 28, iconColor);
@@ -737,7 +872,8 @@ void RemoteApp::drawBridges() {
     display.print(bridge.name.substring(0, 10));
     drawChevron(display, 332, y + 29, kMint);
   }
-  drawFooter(pairingClosed ? "OPEN PAIRING ON MAC" : "BOOT REFRESH  SWIPE");
+  drawFooter(pairingClosed ? "OPEN PAIRING ON MAC"
+                           : "PWR SELECT  BOOT BACK");
 }
 
 void RemoteApp::drawConversation() {
@@ -750,20 +886,24 @@ void RemoteApp::drawConversation() {
   if (_client.activeThreadId().isEmpty()) {
     drawOrb(display, SCREEN_WIDTH_PX / 2, 210, 58, true);
     drawCenteredText(display, "LOADING THREAD", 280, 3, kMint);
+    drawFooter("BOOT BACK");
     return;
   }
 
-  display.setTextSize(2);
+  display.setFont(u8g2_font_helvB18_tf);
+  display.setTextSize(1);
   display.setTextColor(kWhite);
-  display.setCursor(64, 74);
-  display.print(_client.activeThreadTitle().substring(0, 23));
+  display.setCursor(64, 92);
+  display.print(fitTextToWidth(display, _client.activeThreadTitle(), 282));
+  display.setFont();
+  display.setTextSize(2);
 
   if (_recording) {
     drawOrb(display, SCREEN_WIDTH_PX / 2, 185, 75, true);
     drawWaveform(display, 306, true);
     drawCenteredText(display, "LISTENING...", 342, 3, kMint);
-    drawCenteredText(display, "RELEASE BOOT TO SEND", 375, 2, kWhite);
-    drawFooter("BOARD MIC ACTIVE");
+    drawCenteredText(display, "PWR SEND  BOOT CANCEL", 375, 2, kWhite);
+    drawFooter("RECORDING");
     return;
   }
 
@@ -772,7 +912,7 @@ void RemoteApp::drawConversation() {
     drawWaveform(display, 278, true);
     drawCenteredText(display, "CODEX IS THINKING", 321, 3, kMint);
     drawCenteredText(display, "REQUEST SENT", 356, 2, kMuted);
-    drawFooter("WAITING FOR REPLY");
+    drawFooter("BOOT BACK");
     return;
   }
 
@@ -783,9 +923,9 @@ void RemoteApp::drawConversation() {
     display.fillArc(SCREEN_WIDTH_PX / 2, 218, 63, 60, 315, 360, kViolet);
     display.fillArc(SCREEN_WIDTH_PX / 2, 218, 63, 60, 0, 135, kViolet);
     drawMicrophone(display, SCREEN_WIDTH_PX / 2, 212, kWhite);
-    drawCenteredText(display, "HOLD BOOT TO TALK", 298, 3, kMint);
-    drawCenteredText(display, "RELEASE TO SEND", 333, 2, kMuted);
-    drawFooter("TAP BACK FOR THREADS");
+    drawCenteredText(display, "PRESS PWR", 298, 3, kMint);
+    drawCenteredText(display, "TO START RECORDING", 333, 2, kMuted);
+    drawFooter("BOOT BACK");
     return;
   }
 
@@ -795,22 +935,26 @@ void RemoteApp::drawConversation() {
                           String(_client.messageCount()) + "  PAGE " +
                           String(_readerPage + 1) + "/" + String(pageCount);
   display.setTextColor(kMuted);
-  display.setCursor(SCREEN_WIDTH_PX - 16 - position.length() * 12, 96);
+  display.setCursor(SCREEN_WIDTH_PX - 16 - position.length() * 12,
+                    kMessagePositionY);
   display.print(position);
 
   const bool user = message.role == "user";
-  display.fillRoundRect(16, 113, 336, 278, 17,
+  display.fillRoundRect(16, kMessageCardY, 336, kMessageCardHeight, 17,
                         user ? kPanelSelected : kPanel);
-  display.drawRoundRect(16, 113, 336, 278, 17, user ? kBlue : kPanelGlow);
-  display.fillCircle(43, 142, 18, user ? 0x10A5 : 0x0868);
+  display.drawRoundRect(16, kMessageCardY, 336, kMessageCardHeight, 17,
+                        user ? kBlue : kPanelGlow);
+  display.fillCircle(43, kMessageHeaderCenterY, 18,
+                     user ? 0x10A5 : 0x0868);
   if (user) {
-    drawMicrophone(display, 43, 139, kCyan);
+    drawMicrophone(display, 43, kMessageHeaderCenterY - 3, kCyan);
   } else {
-    drawSpark(display, 43, 142, 10, kMint);
+    drawSpark(display, 43, kMessageHeaderCenterY, 10, kMint);
   }
-  display.setTextSize(2);
+  display.setFont(u8g2_font_helvB14_tf);
+  display.setTextSize(1);
   display.setTextColor(user ? kCyan : kMint);
-  display.setCursor(70, 132);
+  display.setCursor(70, kMessageHeaderBaselineY);
   display.print(user ? "YOU SAID" : "CODEX REPLY");
   if (_readerPage > 0) {
     display.setTextColor(kMuted);
@@ -820,28 +964,38 @@ void RemoteApp::drawConversation() {
     display.setTextColor(kMint);
     display.print("  *");
   }
-  drawMessageTextPage(message.text, _readerPage, 30, 166,
+  display.setFont();
+  drawMessageTextPage(message.text, _readerPage, 30,
+                      kMessageTextBaselineY,
                       kMessageCharactersPerLine, kMessageLinesPerPage,
                       user ? kCyan : kWhite);
-  drawFooter(_playbackActive ? "PLAYING REPLY"
-                             : "BOOT TALK  SWIPE PAGES");
+  drawFooter(_playbackActive ? "PLAYING  BOOT BACK"
+                             : "PWR TALK  BOOT BACK");
 }
 
 void RemoteApp::drawFooter(const char *label) {
   Arduino_GFX &display = Board::display();
   display.fillRoundRect(20, 402, 328, 38, 18, kPanel);
-  display.setTextSize(2);
+  display.setFont(u8g2_font_helvB12_tf);
+  display.setTextSize(1);
   display.setTextColor(kMuted);
-  const int width = strlen(label) * 12;
-  display.setCursor(max(3, (SCREEN_WIDTH_PX - width) / 2), 413);
+  int16_t x1 = 0;
+  int16_t y1 = 0;
+  uint16_t width = 0;
+  uint16_t height = 0;
+  display.getTextBounds(label, 0, 0, &x1, &y1, &width, &height);
+  display.setCursor(max(3, (SCREEN_WIDTH_PX - static_cast<int>(width)) / 2),
+                    427);
   display.print(label);
+  display.setFont();
 }
 
 void RemoteApp::drawMessageTextPage(const String &text, int page, int x, int y,
                                     int charactersPerLine, int linesPerPage,
                                     uint16_t color) {
   Arduino_GFX &display = Board::display();
-  display.setTextSize(2);
+  display.setFont(u8g2_font_helvR24_tf);
+  display.setTextSize(1);
   display.setTextColor(color);
   int offset = 0;
   int wrappedLine = 0;
@@ -851,7 +1005,7 @@ void RemoteApp::drawMessageTextPage(const String &text, int page, int x, int y,
     const int paragraphEnd = newline >= 0 ? newline : text.length();
     if (paragraphEnd == offset) {
       if (wrappedLine >= firstLine) {
-        y += 16;
+        y += kMessageLineHeight;
       }
       wrappedLine++;
       offset++;
@@ -872,7 +1026,7 @@ void RemoteApp::drawMessageTextPage(const String &text, int page, int x, int y,
     if (wrappedLine >= firstLine) {
       display.setCursor(x, y);
       display.print(text.substring(offset, offset + split));
-      y += 16;
+      y += kMessageLineHeight;
     }
     wrappedLine++;
     offset += split;
@@ -884,6 +1038,7 @@ void RemoteApp::drawMessageTextPage(const String &text, int page, int x, int y,
       offset = newline + 1;
     }
   }
+  display.setFont();
 }
 
 int RemoteApp::wrappedLineCount(const String &text,

@@ -23,6 +23,9 @@ describe('device protocol', () => {
   });
 
   it('bounds device commands before they reach Codex', () => {
+    expect(parseDeviceCommand({ type: 'audio_cancel' })).toStrictEqual({
+      type: 'audio_cancel',
+    });
     expect(() => parseDeviceCommand({
       type: 'send_text',
       text: '',

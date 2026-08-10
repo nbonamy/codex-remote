@@ -61,6 +61,7 @@ public:
   const RemoteMessage &message(int index) const { return _messages[index]; }
   const RemoteBridge &bridge(int index) const { return _bridges[index]; }
   bool pairingPending() const { return _pairingPending; }
+  bool selectingBridge() const { return _selectingBridge; }
   const String &pairingCode() const { return _pairingCode; }
   const String &selectedBridgeName() const { return _selectedBridgeName; }
   const String &selectedHostName() const { return _selectedHostName; }
@@ -71,9 +72,13 @@ public:
   bool startAudio(const String &threadId);
   bool sendAudio(const uint8_t *data, size_t length);
   bool endAudio();
+  bool cancelAudio();
   bool interrupt(const String &threadId);
   void clearActiveThread();
   void beginBridgeSelection();
+  void cancelPairing();
+  void endBridgeSelection();
+  bool checkPairing();
   bool refreshBridges();
   bool selectBridge(int index);
 

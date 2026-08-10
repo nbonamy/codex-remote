@@ -173,6 +173,9 @@ bool init() {
     pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
     pmu.clearIrqStatus();
     pmu.setChargeTargetVoltage(3);
+    pmu.setPowerKeyPressOffTime(XPOWERS_POWEROFF_10S);
+    pmu.enableLongPressShutdown();
+    pmu.setLongPressPowerOFF();
     pmu.enableIRQ(
         XPOWERS_AXP2101_PKEY_POSITIVE_IRQ | XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ |
         XPOWERS_AXP2101_PKEY_SHORT_IRQ | XPOWERS_AXP2101_PKEY_LONG_IRQ);
@@ -246,16 +249,16 @@ bool readTouch(TouchPoint &point) {
 }
 
 /**
- * @brief Read the current state of button A.
- * @return True when button A is pressed.
+ * @brief Read the current state of the physical BOOT button.
+ * @return True when BOOT is pressed.
  */
-bool buttonAIsPressed() { return digitalRead(BUTTON_A_PIN) == LOW; }
+bool bootButtonIsPressed() { return digitalRead(BUTTON_A_PIN) == LOW; }
 
 /**
- * @brief Read the current state of the PMU-backed button B.
+ * @brief Read the current state of the PMU-backed physical PWR button.
  * @return True when the button is pressed or within a pulse window.
  */
-bool buttonBIsPressed() { return pwrPressed || millis() < pwrPulseUntilMs; }
+bool powerButtonIsPressed() { return pwrPressed || millis() < pwrPulseUntilMs; }
 
 /**
  * @brief Apply display brightness and cache the requested value.
@@ -363,8 +366,9 @@ LightSleepWakeReason enterLightSleep(unsigned long wakeIntervalMs) {
     return LightSleepWakeReason::Button;
   }
   if (reason == ESP_SLEEP_WAKEUP_TIMER) {
-    return buttonAIsPressed() || buttonBIsPressed() ? LightSleepWakeReason::Button
-                                                    : LightSleepWakeReason::Timer;
+    return bootButtonIsPressed() || powerButtonIsPressed()
+               ? LightSleepWakeReason::Button
+               : LightSleepWakeReason::Timer;
   }
   return LightSleepWakeReason::Other;
 }

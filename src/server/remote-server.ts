@@ -662,6 +662,9 @@ export class CodexRemoteServer {
         }
         case 'audio_end':
           await this.finishAudio(session);
+          return;
+        case 'audio_cancel':
+          await this.cancelAudio(session);
       }
     } catch (error) {
       this.sendError(session, error);
@@ -752,6 +755,15 @@ export class CodexRemoteServer {
       status: 'sending',
       detail: 'Waiting for Codex',
     });
+  }
+
+  private async cancelAudio(session: DeviceSession): Promise<void> {
+    const capture = session.audio;
+    session.audio = null;
+    if (capture?.mode === 'realtime') {
+      await this.releaseRealtime(session);
+    }
+    this.send(session, { type: 'status', status: 'ready' });
   }
 
   private async ensureRealtime(

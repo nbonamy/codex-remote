@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <U8g2lib.h>
 #include <Arduino_GFX_Library.h>
 #include "hal/DeviceCapabilities.h"
 
@@ -38,11 +39,11 @@ bool touchAvailable();
 /// Poll the current touch state.
 bool readTouch(TouchPoint &point);
 
-/// Whether button A is currently pressed.
-bool buttonAIsPressed();
+/// Whether the physical BOOT button is currently pressed.
+bool bootButtonIsPressed();
 
-/// Whether button B is currently pressed.
-bool buttonBIsPressed();
+/// Whether the physical PWR button is currently pressed.
+bool powerButtonIsPressed();
 
 /**
  * @brief Set display backlight brightness.
