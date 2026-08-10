@@ -132,6 +132,8 @@ private:
   void loadPairings();
   void savePairing(const String &bridgeId, const String &bridgeName,
                    const String &token);
+  void forgetPairing(const String &bridgeId);
+  void persistPairings();
   void saveSelectedBridge();
   bool sendControl(JsonDocument &document);
   void handleMessage(websockets::WebsocketsMessage message);

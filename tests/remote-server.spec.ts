@@ -156,6 +156,24 @@ describe('CodexRemoteServer device pairing', () => {
     await expect(messages.nextJson('hello')).resolves.toMatchObject({
       type: 'hello',
     });
+
+    const closedByRevocation = new Promise<number>((resolve) => {
+      socket.once('close', (code) => resolve(code));
+    });
+    const revoked = await pairing.revoke('esp32-a1b2');
+    expect(revoked?.token).toBe(approved.token);
+    server.disconnectAuthorizationToken(revoked?.token ?? '');
+    await expect(closedByRevocation).resolves.toBe(1008);
+
+    const rejectedSocket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/hosts/codex/device`,
+      { headers: { 'X-Codex-Remote-Token': approved.token } },
+    );
+    sockets.push(rejectedSocket);
+    await expect(new Promise<void>((resolve, reject) => {
+      rejectedSocket.once('open', resolve);
+      rejectedSocket.once('error', reject);
+    })).rejects.toThrow('Unexpected server response: 401');
   });
 });
 
@@ -550,12 +568,27 @@ function fakeConversation(realtime: CodexRealtimeSession): CodexConversation {
   const snapshot = conversationSnapshot();
   return {
     id: 'thread-1',
+    fork: vi.fn(async () => ({
+      conversationId: 'thread-1',
+      conversation: undefined as never,
+      snapshot,
+    })),
+    forkMessage: vi.fn(async () => ({
+      conversationId: 'thread-1',
+      conversation: undefined as never,
+      snapshot,
+    })),
     load: vi.fn(async () => snapshot),
     select: vi.fn(async () => snapshot),
     readHistory: vi.fn(async () => ({
       conversationId: 'thread-1',
       messages: [],
       threadStatus: { type: 'idle' as const },
+    })),
+    loadOlderHistory: vi.fn(async () => ({
+      conversationId: 'thread-1',
+      messages: [],
+      hasOlder: false,
     })),
     rename: vi.fn(async () => snapshot),
     updateSettings: vi.fn(async () => snapshot),

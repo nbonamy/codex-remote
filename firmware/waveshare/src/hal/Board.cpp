@@ -21,6 +21,9 @@ Arduino_CO5300 *displayPanel =
 Arduino_SH8601 *displayPanel = new Arduino_SH8601(
     displayBus, GFX_NOT_DEFINED, 0, SCREEN_WIDTH_PX, SCREEN_HEIGHT_PX);
 #endif
+/// Indexed PSRAM canvas prevents visible partial redraws and supports captures.
+Arduino_Canvas_Indexed *displayCanvas = new Arduino_Canvas_Indexed(
+    SCREEN_WIDTH_PX, SCREEN_HEIGHT_PX, displayPanel);
 
 /// Power-management IC driver instance.
 XPowersPMU pmu;
@@ -194,7 +197,20 @@ void update() { pollPmuButton(); }
  * @brief Access the shared display driver.
  * @return Reference to the display panel.
  */
-Arduino_GFX &display() { return *displayPanel; }
+Arduino_GFX &display() { return *displayCanvas; }
+
+void flushDisplay() { displayCanvas->flush(); }
+
+void writeDisplayScreenshot(Stream &stream) {
+  stream.printf("CODEX_REMOTE_SCREENSHOT_V1 %d %d\n", SCREEN_WIDTH_PX,
+                SCREEN_HEIGHT_PX);
+  stream.write(reinterpret_cast<const uint8_t *>(
+                   displayCanvas->getColorIndex()),
+               256 * sizeof(uint16_t));
+  stream.write(displayCanvas->getFramebuffer(),
+               SCREEN_WIDTH_PX * SCREEN_HEIGHT_PX);
+  stream.flush();
+}
 
 bool touchAvailable() { return touchAddress != 0; }
 

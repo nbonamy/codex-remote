@@ -13,6 +13,12 @@ export type CodexRemoteDesktopState = {
   hosts: CodexRemoteHostState[];
   pairingOpenUntil: number | null;
   pairedDeviceCount: number;
+  pairedDevices: Array<{
+    id: string;
+    name: string;
+    pairedAt: string;
+    lastSeenAt: string | null;
+  }>;
   pendingPairings: Array<{
     id: string;
     deviceName: string;

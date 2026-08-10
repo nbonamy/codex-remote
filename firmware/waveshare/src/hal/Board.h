@@ -26,6 +26,12 @@ void update();
 /// Shared display driver instance.
 Arduino_GFX &display();
 
+/// Push the off-screen display buffer to the physical AMOLED panel.
+void flushDisplay();
+
+/// Write the current indexed framebuffer and palette to a debug stream.
+void writeDisplayScreenshot(Stream &stream);
+
 /// Whether a supported touch controller was detected.
 bool touchAvailable();
 

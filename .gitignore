@@ -3,6 +3,7 @@ dist-main/
 dist-renderer/
 release/
 coverage/
+artifacts/
 .DS_Store
 *.log
 .env

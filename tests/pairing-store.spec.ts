@@ -37,6 +37,13 @@ describe('PairingStore', () => {
       id: 'esp32-a1b2',
       name: 'Pocket Remote A1B2',
     }]);
+
+    const revoked = await reloaded.revoke('esp32-a1b2');
+    expect(revoked?.token).toBe(result.token);
+    expect(reloaded.isAuthorized(result.token ?? '')).toBe(false);
+    expect(reloaded.pairedDevices()).toEqual([]);
+    const afterRevoke = await PairingStore.open(filePath, 'Codex Remote on studio');
+    expect(afterRevoke.isAuthorized(result.token ?? '')).toBe(false);
   });
 
   it('only creates requests while the user-visible pairing window is open', async () => {

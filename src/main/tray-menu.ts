@@ -10,6 +10,7 @@ export type TrayMenuActions = {
   closePairing(): void;
   approvePairing(requestId: string): void;
   rejectPairing(requestId: string): void;
+  revokeDevice(deviceId: string): void;
   quit(): void;
 };
 
@@ -50,12 +51,18 @@ export function trayMenuTemplate(
         },
       ],
     })),
-    ...(state.pairedDeviceCount > 0
+    ...(state.pairedDevices.length > 0
       ? [{
-          label: `${state.pairedDeviceCount} paired device${
-            state.pairedDeviceCount === 1 ? '' : 's'
-          }`,
-          enabled: false,
+          label: `Paired Devices (${state.pairedDevices.length})`,
+          submenu: state.pairedDevices.map((device) => ({
+            label: device.name,
+            submenu: [
+              {
+                label: 'Revoke Access',
+                click: () => actions.revokeDevice(device.id),
+              },
+            ],
+          })),
         }]
       : []),
     { type: 'separator' },

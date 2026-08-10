@@ -38,9 +38,11 @@ private:
   bool _playbackActive = false;
   bool _dirty = true;
   unsigned long _lastDrawMs = 0;
+  String _serialCommand;
 
   void handleButtons();
   void handleTouch();
+  void handleSerialDebug();
   void handleTap(int x, int y);
   void pageForward();
   void pageBack();
@@ -55,6 +57,7 @@ private:
   int messagePageCount(const RemoteMessage &message) const;
   String latestAssistantId() const;
   void draw();
+  void drawAnimationFrame();
   void drawHeader();
   void drawThreads();
   void drawConversation();

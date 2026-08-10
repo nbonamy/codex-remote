@@ -67,6 +67,24 @@ describe('trayMenuTemplate', () => {
     expect(approvePairing).toHaveBeenCalledWith('request-1');
   });
 
+  it('revokes a paired device from its submenu', () => {
+    const revokeDevice = vi.fn();
+    const menu = trayMenuTemplate(state({
+      pairedDeviceCount: 1,
+      pairedDevices: [{
+        id: 'esp32-a1b2',
+        name: 'Pocket Remote A1B2',
+        pairedAt: '2026-08-10T12:00:00.000Z',
+        lastSeenAt: null,
+      }],
+    }), actions({ revokeDevice }));
+
+    const devices = submenu(item(menu, 'Paired Devices (1)'));
+    const device = submenu(item(devices, 'Pocket Remote A1B2'));
+    item(device, 'Revoke Access').click?.({} as never, {} as never, {} as never);
+    expect(revokeDevice).toHaveBeenCalledWith('esp32-a1b2');
+  });
+
   it('keeps the router ready when one Codex host fails', () => {
     const menu = trayMenuTemplate(state({
       phase: 'ready',
@@ -106,6 +124,7 @@ function state(
     ],
     pairingOpenUntil: null,
     pairedDeviceCount: 0,
+    pairedDevices: [],
     pendingPairings: [],
     server: null,
     ...patch,
@@ -146,6 +165,7 @@ function actions(
     closePairing: vi.fn(),
     approvePairing: vi.fn(),
     rejectPairing: vi.fn(),
+    revokeDevice: vi.fn(),
     quit: vi.fn(),
     ...patch,
   };

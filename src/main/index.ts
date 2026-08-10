@@ -48,6 +48,7 @@ let desktopState: CodexRemoteDesktopState = {
   hosts: [],
   pairingOpenUntil: null,
   pairedDeviceCount: 0,
+  pairedDevices: [],
   pendingPairings: [],
   server: null,
 };
@@ -114,6 +115,15 @@ function refreshTrayMenu(): void {
       });
     },
     rejectPairing: (requestId) => pairing?.reject(requestId),
+    revokeDevice: (deviceId) => {
+      void pairing?.revoke(deviceId).then((device) => {
+        if (device) server?.disconnectAuthorizationToken(device.token);
+      }).catch((error) => {
+        publishState({
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    },
     quit: () => app.quit(),
   })));
 }
@@ -222,9 +232,16 @@ function initialHostState(profile: CodexRemoteHostProfile): CodexRemoteHostState
 
 function refreshPairingState(): void {
   if (!pairing) return;
+  const pairedDevices = pairing.pairedDevices();
   publishState({
     pairingOpenUntil: pairing.pairingExpiresAt(),
-    pairedDeviceCount: pairing.pairedDevices().length,
+    pairedDeviceCount: pairedDevices.length,
+    pairedDevices: pairedDevices.map((device) => ({
+      id: device.id,
+      name: device.name,
+      pairedAt: device.pairedAt,
+      lastSeenAt: device.lastSeenAt,
+    })),
     pendingPairings: pairing.pendingRequests().map((request) => ({
       id: request.id,
       deviceName: request.deviceName,

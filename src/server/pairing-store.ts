@@ -194,6 +194,18 @@ export class PairingStore {
     this.changed();
   }
 
+  async revoke(deviceId: string): Promise<PairedDevice | null> {
+    const index = this.devices.findIndex((device) => device.id === deviceId);
+    if (index < 0) return null;
+    const [device] = this.devices.splice(index, 1);
+    for (const [requestId, request] of this.requests) {
+      if (request.deviceId === deviceId) this.requests.delete(requestId);
+    }
+    await this.persist();
+    this.changed();
+    return device ? { ...device } : null;
+  }
+
   isAuthorized(token: string): boolean {
     if (!token) return false;
     return this.devices.some((device) => safeEquals(device.token, token));

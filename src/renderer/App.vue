@@ -8,6 +8,7 @@ const state = ref<CodexRemoteDesktopState>({
   hosts: [],
   pairingOpenUntil: null,
   pairedDeviceCount: 0,
+  pairedDevices: [],
   pendingPairings: [],
   server: null,
 });

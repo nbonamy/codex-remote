@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
 import http, {
   type IncomingMessage,
@@ -92,6 +93,7 @@ type DeviceRealtime = {
 
 type DeviceSession = {
   socket: WebSocket;
+  authorizationToken: string;
   host: RemoteCodexHost;
   threadId: string | null;
   audio: AudioCapture | null;
@@ -112,6 +114,7 @@ export class CodexRemoteServer {
   private readonly unsubscribeHostListeners: Array<() => void> = [];
   private bonjour: Bonjour | null = null;
   private mdnsService: ReturnType<Bonjour['publish']> | null = null;
+  private mdnsProcess: ChildProcess | null = null;
   private info: RemoteServerInfo | null = null;
   private readonly realtimeStartupErrors = new Map<string, string>();
 
@@ -135,6 +138,9 @@ export class CodexRemoteServer {
     this.httpServer.on('upgrade', (request, socket, head) => {
       const requestUrl = request.url ? new URL(request.url, 'http://localhost') : null;
       const host = requestUrl ? this.deviceHost(requestUrl.pathname) : null;
+      const authorizationToken = requestUrl
+        ? requestAuthorizationToken(request, requestUrl)
+        : '';
       if (
         !requestUrl
         || !host
@@ -145,7 +151,7 @@ export class CodexRemoteServer {
         return;
       }
       this.wsServer.handleUpgrade(request, socket, head, (webSocket) => {
-        this.attachDevice(webSocket, host);
+        this.attachDevice(webSocket, host, authorizationToken);
       });
     });
     for (const host of this.hosts) {
@@ -199,31 +205,7 @@ export class CodexRemoteServer {
     };
 
     if (this.options.advertise !== false && port !== 0) {
-      const bonjourInterface = preferredBonjourInterface();
-      this.bonjour = new Bonjour(
-        bonjourInterface
-          ? ({ bind: '0.0.0.0', interface: bonjourInterface } as never)
-          : undefined,
-        (error: unknown) => {
-          console.warn('Codex Remote Bonjour advertisement failed:', error);
-        },
-      );
-      this.mdnsService = this.bonjour.publish({
-        name: this.options.pairing?.bridgeName ?? `Codex Remote on ${os.hostname()}`,
-        type: 'codex-remote',
-        protocol: 'tcp',
-        port,
-        txt: {
-          api: String(API_VERSION),
-          path: '/api/v1/hosts/{hostId}/device',
-          ...(this.options.pairing
-            ? {
-                bridgeId: this.options.pairing.bridgeId,
-                bridgeName: this.options.pairing.bridgeName,
-              }
-            : {}),
-        },
-      });
+      this.publishBonjour(port);
     }
 
     return this.info;
@@ -236,6 +218,15 @@ export class CodexRemoteServer {
       networkUrls: [...this.info.networkUrls],
       realtimeVoiceAvailable: this.hosts.some((host) => this.isRealtimeVoiceAvailable(host)),
     };
+  }
+
+  disconnectAuthorizationToken(token: string): void {
+    if (!token) return;
+    for (const session of this.sessions) {
+      if (safeTokenEquals(session.authorizationToken, token)) {
+        session.socket.close(1008, 'Device access revoked');
+      }
+    }
   }
 
   async close(): Promise<void> {
@@ -252,6 +243,8 @@ export class CodexRemoteServer {
     this.mdnsService = null;
     this.bonjour?.destroy();
     this.bonjour = null;
+    this.mdnsProcess?.kill('SIGTERM');
+    this.mdnsProcess = null;
 
     if (this.httpServer.listening) {
       await new Promise<void>((resolve) => this.httpServer.close(() => resolve()));
@@ -468,9 +461,61 @@ export class CodexRemoteServer {
       && safeTokenEquals(url.searchParams.get('token') ?? '', this.options.token);
   }
 
-  private attachDevice(socket: WebSocket, host: RemoteCodexHost): void {
+  private publishBonjour(port: number): void {
+    const name = this.options.pairing?.bridgeName ?? `Codex Remote on ${os.hostname()}`;
+    const txt = {
+      api: String(API_VERSION),
+      path: '/api/v1/hosts/{hostId}/device',
+      ...(this.options.pairing
+        ? {
+            bridgeId: this.options.pairing.bridgeId,
+            bridgeName: this.options.pairing.bridgeName,
+          }
+        : {}),
+    };
+    if (process.platform === 'darwin') {
+      const publisher = spawn('/usr/bin/dns-sd', [
+        '-R',
+        name,
+        '_codex-remote._tcp',
+        'local.',
+        String(port),
+        ...Object.entries(txt).map(([key, value]) => `${key}=${value}`),
+      ], { stdio: 'ignore' });
+      publisher.once('error', (error) => {
+        console.warn('Codex Remote Bonjour advertisement failed:', error);
+      });
+      publisher.once('exit', (code, signal) => {
+        if (this.mdnsProcess !== publisher) return;
+        this.mdnsProcess = null;
+        if (this.info && code !== 0 && signal !== 'SIGTERM') {
+          console.warn(`Codex Remote Bonjour publisher exited with code ${code}`);
+        }
+      });
+      publisher.unref();
+      this.mdnsProcess = publisher;
+      return;
+    }
+    this.bonjour = new Bonjour({}, (error: unknown) => {
+      console.warn('Codex Remote Bonjour advertisement failed:', error);
+    });
+    this.mdnsService = this.bonjour.publish({
+      name,
+      type: 'codex-remote',
+      protocol: 'tcp',
+      port,
+      txt,
+    });
+  }
+
+  private attachDevice(
+    socket: WebSocket,
+    host: RemoteCodexHost,
+    authorizationToken: string,
+  ): void {
     const session: DeviceSession = {
       socket,
+      authorizationToken,
       host,
       threadId: null,
       audio: null,
@@ -1053,10 +1098,8 @@ function lanAddresses(): string[] {
   return [...addresses].sort();
 }
 
-function preferredBonjourInterface(): string | undefined {
-  const interfaces = os.networkInterfaces();
-  const wifiAddress = interfaces.en0?.find((address) => (
-    address.family === 'IPv4' && !address.internal
-  ));
-  return wifiAddress?.address ?? lanAddresses()[0];
+function requestAuthorizationToken(request: IncomingMessage, url: URL): string {
+  const header = request.headers['x-codex-remote-token'];
+  const headerToken = Array.isArray(header) ? header[0] : header;
+  return headerToken ?? url.searchParams.get('token') ?? '';
 }

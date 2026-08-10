@@ -17,6 +17,10 @@ void RemoteClient::begin(RemoteClientListener *listener) {
   _deviceId = deviceId;
   _deviceName = "Pocket Remote " + _deviceId.substring(_deviceId.length() - 4);
   loadPairings();
+  if (strlen(SERVER_HOST) == 0 && _selectedBridgeId.startsWith("configured")) {
+    _selectedBridgeId = "";
+    forgetPairing("configured");
+  }
 
   _status = "Joining Wi-Fi";
   changed();
@@ -347,6 +351,23 @@ bool RemoteClient::startPairing() {
     changed();
     return false;
   }
+  const String responseBridgeId = String(response["bridgeId"] | "");
+  const String responseBridgeName = String(response["bridgeName"] | "");
+  if (!responseBridgeId.isEmpty()) {
+    _selectedRouterId = responseBridgeId;
+    if (!responseBridgeName.isEmpty()) {
+      _selectedRouterName = responseBridgeName;
+      _selectedBridgeName = responseBridgeName;
+    }
+    _selectedBridgeId = responseBridgeId + "|" + _selectedHostId;
+    for (int index = 0; index < _bridgeCount; index++) {
+      if (_bridges[index].hostId != _selectedHostId) continue;
+      _bridges[index].routerId = responseBridgeId;
+      _bridges[index].routerName = _selectedRouterName;
+      _bridges[index].id = _selectedBridgeId;
+    }
+    saveSelectedBridge();
+  }
   _pairingPending = true;
   _lastPairingPollMs = millis();
   _status = "Approve on Mac";
@@ -476,6 +497,24 @@ void RemoteClient::savePairing(const String &bridgeId,
     }
   }
 
+  persistPairings();
+}
+
+void RemoteClient::forgetPairing(const String &bridgeId) {
+  int writeIndex = 0;
+  for (int readIndex = 0; readIndex < _pairingCount; readIndex++) {
+    if (_pairings[readIndex].id == bridgeId) continue;
+    if (writeIndex != readIndex) _pairings[writeIndex] = _pairings[readIndex];
+    writeIndex++;
+  }
+  _pairingCount = writeIndex;
+  for (int index = 0; index < _bridgeCount; index++) {
+    if (_bridges[index].routerId == bridgeId) _bridges[index].paired = false;
+  }
+  persistPairings();
+}
+
+void RemoteClient::persistPairings() {
   JsonDocument document;
   JsonArray pairings = document.to<JsonArray>();
   for (int index = 0; index < _pairingCount; index++) {
@@ -618,7 +657,22 @@ void RemoteClient::handleEvent(WebsocketsEvent event, const String &data) {
     listThreads();
   } else if (event == WebsocketsEvent::ConnectionClosed) {
     _connected = false;
-    _status = "Reconnecting";
+    if (_ws.getCloseReason() == CloseReason_PolicyViolation) {
+      const String revokedRouterId = _selectedRouterId;
+      _selectedBridgeId = "";
+      _selectedBridgeName = "";
+      _selectedRouterId = "";
+      _selectedRouterName = "";
+      _selectedHostId = "";
+      _selectedHostName = "";
+      _currentToken = "";
+      _selectingBridge = true;
+      forgetPairing(revokedRouterId);
+      _status = "Access revoked";
+      _error = "Choose the Mac to pair again";
+    } else {
+      _status = "Reconnecting";
+    }
   }
   changed();
 }
