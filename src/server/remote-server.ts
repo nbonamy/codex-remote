@@ -199,7 +199,15 @@ export class CodexRemoteServer {
     };
 
     if (this.options.advertise !== false && port !== 0) {
-      this.bonjour = new Bonjour();
+      const bonjourInterface = preferredBonjourInterface();
+      this.bonjour = new Bonjour(
+        bonjourInterface
+          ? ({ bind: '0.0.0.0', interface: bonjourInterface } as never)
+          : undefined,
+        (error: unknown) => {
+          console.warn('Codex Remote Bonjour advertisement failed:', error);
+        },
+      );
       this.mdnsService = this.bonjour.publish({
         name: this.options.pairing?.bridgeName ?? `Codex Remote on ${os.hostname()}`,
         type: 'codex-remote',
@@ -1043,4 +1051,12 @@ function lanAddresses(): string[] {
     }
   }
   return [...addresses].sort();
+}
+
+function preferredBonjourInterface(): string | undefined {
+  const interfaces = os.networkInterfaces();
+  const wifiAddress = interfaces.en0?.find((address) => (
+    address.family === 'IPv4' && !address.internal
+  ));
+  return wifiAddress?.address ?? lanAddresses()[0];
 }

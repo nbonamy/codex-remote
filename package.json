@@ -86,6 +86,10 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "LSUIElement": true,
+        "NSLocalNetworkUsageDescription": "Codex Remote discovers and connects to your ESP32 device on the local network.",
+        "NSBonjourServices": [
+          "_codex-remote._tcp"
+        ],
         "NSMicrophoneUsageDescription": "Codex Remote uses the microphone for push-to-talk Codex commands.",
         "NSSpeechRecognitionUsageDescription": "Codex Remote transcribes push-to-talk audio into Codex commands."
       }

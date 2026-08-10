@@ -35,7 +35,10 @@ void RemoteClient::begin(RemoteClientListener *listener) {
   }
   MDNS.begin("codex-remote-device");
   refreshBridges();
-  if (!_selectedBridgeId.isEmpty()) {
+  if (strlen(SERVER_HOST) > 0 && _bridgeCount == 1 &&
+      _selectedBridgeId.isEmpty()) {
+    selectBridge(0);
+  } else if (!_selectedBridgeId.isEmpty()) {
     connect();
   } else if (strlen(DEVICE_TOKEN) > 0 && _bridgeCount > 0) {
     _selectedBridgeId = _bridges[0].id;
@@ -120,12 +123,16 @@ void RemoteClient::disconnect() {
 bool RemoteClient::refreshBridges() {
   _bridgeCount = 0;
   if (strlen(SERVER_HOST) > 0) {
+    Log::client("Remote", "refreshing configured host %s:%d",
+                SERVER_HOST, SERVER_PORT);
     appendHostsForBridge("configured", "Configured computer", SERVER_HOST,
                          SERVER_PORT);
+    Log::client("Remote", "configured host returned %d entries", _bridgeCount);
     changed();
     return _bridgeCount > 0;
   }
   const int count = MDNS.queryService("codex-remote", "tcp");
+  Log::client("Remote", "mDNS returned %d services", count);
   String discoveredIds[kMaxBridges];
   int discoveredCount = 0;
   for (int index = 0; index < count && _bridgeCount < kMaxBridges; index++) {
@@ -173,6 +180,9 @@ bool RemoteClient::appendHostsForBridge(const String &routerId,
   const int statusCode = http.GET();
   const String responseBody = http.getString();
   http.end();
+  Log::client("Remote", "GET http://%s:%d/api/v1/hosts -> %d (%s)",
+              serverHost.c_str(), serverPort, statusCode,
+              responseBody.substring(0, 160).c_str());
   JsonDocument response;
   if (statusCode != HTTP_CODE_OK || deserializeJson(response, responseBody)) {
     return false;
