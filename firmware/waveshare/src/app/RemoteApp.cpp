@@ -1306,7 +1306,7 @@ void RemoteApp::drawConversation() {
   display.setTextSize(2);
 
   if (_recording) {
-    drawOrb(display, SCREEN_WIDTH_PX / 2, 185, 75, true);
+    drawOrb(display, SCREEN_WIDTH_PX / 2, 185, 48, true);
     drawWaveform(display, 306, true);
     drawCenteredText(display, "LISTENING...", 342, 3, kMint);
     drawCenteredText(display, "PWR SEND  BOOT CANCEL", 375, 2, kWhite);
