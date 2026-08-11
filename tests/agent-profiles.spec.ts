@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { codexHostProfiles } from '../src/main/host-profiles';
+import { codexAgentProfiles } from '../src/main/agent-profiles';
 
-describe('codexHostProfiles', () => {
-  it('exposes normal Codex and a managed Claw home', () => {
-    expect(codexHostProfiles('/Users/tester')).toEqual([
+describe('codexAgentProfiles', () => {
+  it('exposes normal Codex and a managed Claw agent', () => {
+    expect(codexAgentProfiles('/Users/tester')).toEqual([
       {
         id: 'codex',
         name: 'Codex',

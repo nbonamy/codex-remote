@@ -20,13 +20,21 @@ struct RemoteMessage {
   String status;
 };
 
-struct RemoteBridge {
+struct RemoteHost {
   String id;
   String name;
-  String routerId;
-  String routerName;
+  String address;
+  int port;
+  bool paired;
+};
+
+struct RemoteAgent {
+  String key;
+  String name;
   String hostId;
-  String host;
+  String hostName;
+  String agentId;
+  String address;
   int port;
   bool paired;
   bool selected;
@@ -43,7 +51,8 @@ class RemoteClient {
 public:
   static constexpr int kMaxThreads = 12;
   static constexpr int kMaxMessages = 14;
-  static constexpr int kMaxBridges = 8;
+  static constexpr int kMaxHosts = 8;
+  static constexpr int kMaxAgents = 8;
 
   void begin(RemoteClientListener *listener);
   void update();
@@ -56,15 +65,17 @@ public:
   bool activeThreadBusy() const { return _activeThreadBusy; }
   int threadCount() const { return _threadCount; }
   int messageCount() const { return _messageCount; }
-  int bridgeCount() const { return _bridgeCount; }
+  int hostCount() const { return _hostCount; }
+  int agentCount() const { return _agentCount; }
   const RemoteThread &thread(int index) const { return _threads[index]; }
   const RemoteMessage &message(int index) const { return _messages[index]; }
-  const RemoteBridge &bridge(int index) const { return _bridges[index]; }
+  const RemoteHost &host(int index) const { return _hosts[index]; }
+  const RemoteAgent &agent(int index) const { return _agents[index]; }
   bool pairingPending() const { return _pairingPending; }
-  bool selectingBridge() const { return _selectingBridge; }
+  bool selectingAgent() const { return _selectingAgent; }
   const String &pairingCode() const { return _pairingCode; }
-  const String &selectedBridgeName() const { return _selectedBridgeName; }
   const String &selectedHostName() const { return _selectedHostName; }
+  const String &selectedAgentName() const { return _selectedAgentName; }
 
   bool createThread();
   bool openThread(const String &threadId);
@@ -76,12 +87,13 @@ public:
   bool interrupt(const String &threadId);
   bool speakMessage(const String &threadId, const String &messageId);
   void clearActiveThread();
-  void beginBridgeSelection();
+  void beginAgentSelection();
   void cancelPairing();
-  void endBridgeSelection();
+  void endAgentSelection();
   bool checkPairing();
-  bool refreshBridges();
-  bool selectBridge(int index);
+  bool refreshDiscovery();
+  bool pairHost(int index);
+  bool selectAgent(int index);
 
 private:
   struct StoredPairing {
@@ -94,14 +106,16 @@ private:
   RemoteClientListener *_listener = nullptr;
   RemoteThread _threads[kMaxThreads];
   RemoteMessage _messages[kMaxMessages];
-  RemoteBridge _bridges[kMaxBridges];
-  StoredPairing _pairings[kMaxBridges];
+  RemoteHost _hosts[kMaxHosts];
+  RemoteAgent _agents[kMaxAgents];
+  StoredPairing _pairings[kMaxAgents];
   int _threadCount = 0;
   int _messageCount = 0;
-  int _bridgeCount = 0;
+  int _hostCount = 0;
+  int _agentCount = 0;
   int _pairingCount = 0;
   bool _connected = false;
-  bool _selectingBridge = false;
+  bool _selectingAgent = false;
   bool _pairingPending = false;
   bool _activeThreadBusy = false;
   String _activeThreadId;
@@ -110,38 +124,39 @@ private:
   String _error;
   String _deviceId;
   String _deviceName;
-  String _selectedBridgeId;
-  String _selectedBridgeName;
-  String _selectedRouterId;
-  String _selectedRouterName;
+  String _selectedAgentKey;
   String _selectedHostId;
   String _selectedHostName;
+  String _selectedAgentId;
+  String _selectedAgentName;
   String _currentToken;
   String _pairingRequestId;
   String _pairingCode;
-  String _serverHost;
+  String _hostAddress;
   int _serverPort = SERVER_PORT;
   unsigned long _lastConnectAttemptMs = 0;
+  unsigned long _lastPairingAttemptMs = 0;
   unsigned long _lastPairingPollMs = 0;
+  unsigned long _lastDiscoveryRefreshMs = 0;
 
   void connect();
   void configureWebSocket();
   void disconnect();
-  bool resolveSelectedBridge();
-  bool applySelectedBridge(const RemoteBridge &bridge);
-  void clearRevokedPairing(const String &routerId);
-  bool appendHostsForBridge(const String &routerId,
-                            const String &routerName,
-                            const String &serverHost, int serverPort);
+  bool resolveSelectedAgent();
+  bool applySelectedAgent(const RemoteAgent &agent);
+  void clearRevokedPairing(const String &hostId);
+  bool appendAgentsForHost(const String &hostId,
+                           const String &hostName,
+                           const String &hostAddress, int serverPort);
   bool startPairing();
   void pollPairing();
-  String tokenForBridge(const String &bridgeId) const;
+  String tokenForHost(const String &hostId) const;
   void loadPairings();
-  void savePairing(const String &bridgeId, const String &bridgeName,
+  void savePairing(const String &hostId, const String &hostName,
                    const String &token);
-  void forgetPairing(const String &bridgeId);
+  void forgetPairing(const String &hostId);
   void persistPairings();
-  void saveSelectedBridge();
+  void saveSelectedAgent();
   bool sendControl(JsonDocument &document);
   void handleMessage(websockets::WebsocketsMessage message);
   void handleEvent(websockets::WebsocketsEvent event, const String &data);

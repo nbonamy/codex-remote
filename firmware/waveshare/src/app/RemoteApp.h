@@ -15,15 +15,15 @@ private:
   enum class View {
     Threads,
     Conversation,
-    Bridges,
+    Agents,
   };
 
   RemoteClient _client;
   AudioService _audio;
   View _view = View::Threads;
   int _threadOffset = 0;
-  int _bridgePage = 0;
-  int _bridgeFocusIndex = 0;
+  int _agentPage = 0;
+  int _agentFocusIndex = 0;
   String _readerMessageId;
   int _readerPage = 0;
   bool _awaitingResponse = false;
@@ -51,9 +51,9 @@ private:
   void openThread(int index);
   void createThread();
   void backToThreads();
-  void backFromBridges();
-  void showBridges();
-  void confirmBridge();
+  void backFromAgents();
+  void showAgents();
+  void confirmAgent();
   void startRecording();
   void stopRecording();
   void cancelRecording();
@@ -67,7 +67,7 @@ private:
   void drawHeader();
   void drawThreads();
   void drawConversation();
-  void drawBridges();
+  void drawAgents();
   void drawFooter(const char *label);
   void drawMessageTextPage(const String &text, int page, int x, int y,
                            int charactersPerLine, int linesPerPage,

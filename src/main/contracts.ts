@@ -1,4 +1,4 @@
-export type CodexRemoteHostState = {
+export type CodexRemoteAgentState = {
   id: string;
   name: string;
   codexHome: string;
@@ -10,7 +10,7 @@ export type CodexRemoteHostState = {
 export type CodexRemoteDesktopState = {
   phase: 'starting' | 'ready' | 'error';
   error: string | null;
-  hosts: CodexRemoteHostState[];
+  agents: CodexRemoteAgentState[];
   pairingOpenUntil: number | null;
   pairedDeviceCount: number;
   pairedDevices: Array<{

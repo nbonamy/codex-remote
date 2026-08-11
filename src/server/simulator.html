@@ -157,17 +157,17 @@
         font: 700 17px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
       }
 
-      .host-card {
+      .agent-card {
         grid-template-columns: 26px minmax(0, 1fr) 18px;
       }
 
-      .host-icon {
+      .agent-icon {
         position: relative;
         width: 20px;
         height: 20px;
       }
 
-      .host-icon::before {
+      .agent-icon::before {
         position: absolute;
         top: 0;
         left: 0;
@@ -179,7 +179,7 @@
         content: "";
       }
 
-      .host-icon::after {
+      .agent-icon::after {
         position: absolute;
         bottom: 0;
         left: 4px;
@@ -191,11 +191,11 @@
         content: "";
       }
 
-      .host-title {
+      .agent-title {
         margin-bottom: 0;
       }
 
-      .host-chevron {
+      .agent-chevron {
         justify-self: end;
         color: var(--muted);
         font: 700 18px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -538,19 +538,19 @@
       const MESSAGE_LINES_PER_PAGE = 16;
       const query = new URLSearchParams(location.search);
       const token = query.get("token") || "";
-      const hostId = query.get("hostId") || "codex";
+      const agentId = query.get("agentId") || "codex";
       document.body.classList.toggle("capture-mode", query.get("capture") === "1");
       const socketProtocol = location.protocol === "https:" ? "wss:" : "ws:";
-      const socketUrl = `${socketProtocol}//${location.host}/api/v1/hosts/${
-        encodeURIComponent(hostId)
+      const socketUrl = `${socketProtocol}//${location.host}/api/v1/agents/${
+        encodeURIComponent(agentId)
       }/device?token=${encodeURIComponent(token)}`;
       const state = {
         connected: false,
         view: "threads",
-        hosts: [],
-        hostPage: 0,
-        switchingHost: false,
-        hostName: "",
+        agents: [],
+        agentPage: 0,
+        switchingAgent: false,
+        agentName: "",
         threads: [],
         threadPage: 0,
         thread: null,
@@ -585,7 +585,7 @@
       let playbackCursor = 0;
 
       function connect() {
-        if (state.switchingHost) return;
+        if (state.switchingAgent) return;
         if (!token) {
           showToast("Missing simulator token. Open this page from the Electron app.");
           return;
@@ -602,9 +602,9 @@
         socket.addEventListener("close", () => {
           state.connected = false;
           connection.classList.remove("online");
-          connectionLabel.textContent = state.switchingHost ? "Choose host" : "Retrying";
+          connectionLabel.textContent = state.switchingAgent ? "Choose agent" : "Retrying";
           render();
-          if (!state.switchingHost) window.setTimeout(connect, 1500);
+          if (!state.switchingAgent) window.setTimeout(connect, 1500);
         });
         socket.addEventListener("message", (event) => {
           if (typeof event.data !== "string") {
@@ -614,7 +614,7 @@
           const message = JSON.parse(event.data);
           if (message.type === "hello") {
             state.transcription = message.transcription;
-            state.hostName = message.hostName || "";
+            state.agentName = message.agentName || "";
           } else if (message.type === "threads") {
             state.threads = message.threads;
             state.threadPage = Math.min(state.threadPage, lastThreadPage());
@@ -653,16 +653,16 @@
       }
 
       function render() {
-        brandLabel.textContent = state.view === "hosts"
+        brandLabel.textContent = state.view === "agents"
           ? "Codex Remote"
-          : state.hostName || "Codex Remote";
+          : state.agentName || "Codex Remote";
         connection.classList.toggle("online", state.connected);
         if (state.view === "threads") {
           controls.classList.remove("single");
           buttonA.hidden = false;
           buttonB.hidden = false;
           renderThreads();
-          buttonALabel.textContent = "Hosts";
+          buttonALabel.textContent = "Agents";
           buttonBLabel.textContent = "New thread";
         } else if (state.view === "thread") {
           controls.classList.remove("single");
@@ -675,7 +675,7 @@
           controls.classList.remove("single");
           buttonA.hidden = false;
           buttonB.hidden = false;
-          renderHosts();
+          renderAgents();
           buttonALabel.textContent = "Back";
           buttonBLabel.textContent = "Refresh";
         }
@@ -717,35 +717,35 @@
         return `${first}–${last} of ${state.threads.length} threads`;
       }
 
-      function renderHosts() {
-        const start = state.hostPage * THREADS_PER_PAGE;
-        const entries = state.hosts.slice(start, start + THREADS_PER_PAGE);
+      function renderAgents() {
+        const start = state.agentPage * THREADS_PER_PAGE;
+        const entries = state.agents.slice(start, start + THREADS_PER_PAGE);
         screen.innerHTML = `
-          <p class="eyebrow">${hostPageLabel()}</p>
+          <p class="eyebrow">${agentPageLabel()}</p>
           <div class="thread-list">
-            ${entries.map((host, visibleIndex) => `
-              <article class="thread-card host-card" data-host-index="${start + visibleIndex}">
-                <span class="host-icon" aria-hidden="true"></span>
+            ${entries.map((agent, visibleIndex) => `
+              <article class="thread-card agent-card" data-agent-index="${start + visibleIndex}">
+                <span class="agent-icon" aria-hidden="true"></span>
                 <div class="thread-copy">
-                  <div class="thread-title host-title">${escapeHtml(host.name)}</div>
+                  <div class="thread-title agent-title">${escapeHtml(agent.name)}</div>
                 </div>
-                <span class="host-chevron" aria-hidden="true">›</span>
+                <span class="agent-chevron" aria-hidden="true">›</span>
               </article>
             `).join("")}
           </div>
         `;
-        screen.querySelectorAll("[data-host-index]").forEach((element) => {
+        screen.querySelectorAll("[data-agent-index]").forEach((element) => {
           element.addEventListener("click", () => {
-            selectSimulatorHost(Number(element.dataset.hostIndex));
+            selectSimulatorAgent(Number(element.dataset.agentIndex));
           });
         });
       }
 
-      function hostPageLabel() {
-        if (state.hosts.length === 0) return "No hosts found";
-        const first = state.hostPage * THREADS_PER_PAGE + 1;
-        const last = Math.min(state.hosts.length, first + THREADS_PER_PAGE - 1);
-        return `${first}–${last} of ${state.hosts.length} hosts`;
+      function agentPageLabel() {
+        if (state.agents.length === 0) return "No agents found";
+        const first = state.agentPage * THREADS_PER_PAGE + 1;
+        const last = Math.min(state.agents.length, first + THREADS_PER_PAGE - 1);
+        return `${first}–${last} of ${state.agents.length} agents`;
       }
 
       function renderConversation() {
@@ -900,12 +900,12 @@
           render();
           return;
         }
-        if (state.view === "hosts") {
+        if (state.view === "agents") {
           const lastPage = Math.max(
             0,
-            Math.ceil(state.hosts.length / THREADS_PER_PAGE) - 1,
+            Math.ceil(state.agents.length / THREADS_PER_PAGE) - 1,
           );
-          state.hostPage = Math.min(lastPage, state.hostPage + 1);
+          state.agentPage = Math.min(lastPage, state.agentPage + 1);
           render();
           return;
         }
@@ -927,8 +927,8 @@
           render();
           return;
         }
-        if (state.view === "hosts") {
-          state.hostPage = Math.max(0, state.hostPage - 1);
+        if (state.view === "agents") {
+          state.agentPage = Math.max(0, state.agentPage - 1);
           render();
           return;
         }
@@ -952,49 +952,49 @@
         render();
       }
 
-      async function loadHosts() {
+      async function loadAgents() {
         try {
-          const response = await fetch(`/api/v1/hosts?token=${encodeURIComponent(token)}`, {
+          const response = await fetch(`/api/v1/agents?token=${encodeURIComponent(token)}`, {
             cache: "no-store",
           });
-          if (!response.ok) throw new Error("Host list unavailable");
+          if (!response.ok) throw new Error("Agent list unavailable");
           const result = await response.json();
-          state.hosts = result.hosts || [];
+          state.agents = result.agents || [];
         } catch (error) {
           showToast(error instanceof Error ? error.message : String(error));
         }
         render();
       }
 
-      function showHostSelector() {
+      function showAgentSelector() {
         if (state.view !== "threads") return;
-        state.switchingHost = true;
-        state.view = "hosts";
-        state.hostName = "";
-        state.hostPage = 0;
+        state.switchingAgent = true;
+        state.view = "agents";
+        state.agentName = "";
+        state.agentPage = 0;
         state.connected = false;
-        connectionLabel.textContent = "Choose host";
+        connectionLabel.textContent = "Choose agent";
         socket?.close();
-        void loadHosts();
+        void loadAgents();
         render();
       }
 
-      function backFromHostSelector() {
-        if (state.view !== "hosts") return;
-        state.switchingHost = false;
+      function backFromAgentSelector() {
+        if (state.view !== "agents") return;
+        state.switchingAgent = false;
         state.view = "threads";
-        state.hostPage = 0;
+        state.agentPage = 0;
         connectionLabel.textContent = "Retrying";
         connect();
         render();
       }
 
-      function selectSimulatorHost(index) {
-        const host = state.hosts[index];
-        if (!host) return;
+      function selectSimulatorAgent(index) {
+        const agent = state.agents[index];
+        if (!agent) return;
         const target = new URL("/simulator", location.origin);
         target.searchParams.set("token", token);
-        target.searchParams.set("hostId", host.id);
+        target.searchParams.set("agentId", agent.id);
         window.location.assign(target);
       }
 
@@ -1154,14 +1154,14 @@
       }
 
       buttonA.addEventListener("click", () => {
-        if (state.view === "threads") showHostSelector();
-        else if (state.view === "hosts") backFromHostSelector();
+        if (state.view === "threads") showAgentSelector();
+        else if (state.view === "agents") backFromAgentSelector();
         else if (state.recording) cancelTalk();
         else backToThreads();
       });
       buttonB.addEventListener("click", () => {
         if (state.view === "threads") createThread();
-        else if (state.view === "hosts") void loadHosts();
+        else if (state.view === "agents") void loadAgents();
         else if (state.recording) stopTalk();
         else void startTalk();
       });
@@ -1222,7 +1222,7 @@
       });
 
       render();
-      void loadHosts();
+      void loadAgents();
       connect();
     </script>
   </body>

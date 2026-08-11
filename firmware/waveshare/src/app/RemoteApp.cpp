@@ -23,7 +23,7 @@ constexpr uint16_t kYellow = 0xFE88;
 constexpr uint16_t kGreen = 0x07E8;
 constexpr int kThreadsPerPage = 4;
 constexpr int kThreadScrollStep = kThreadsPerPage;
-constexpr int kBridgesPerPage = 4;
+constexpr int kAgentsPerPage = 4;
 constexpr int kMessageCharactersPerLine = 18;
 constexpr int kMessageLinesPerPage = 6;
 constexpr int kMessageLineHeight = 30;
@@ -231,20 +231,20 @@ void RemoteApp::onRemoteStateChanged() {
   }
   const int lastThreadOffset = max(0, _client.threadCount() - kThreadsPerPage);
   _threadOffset = min(_threadOffset, lastThreadOffset);
-  const int lastBridgePage =
-      max(0, (_client.bridgeCount() + kBridgesPerPage - 1) /
-                     kBridgesPerPage -
+  const int lastAgentPage =
+      max(0, (_client.agentCount() + kAgentsPerPage - 1) /
+                     kAgentsPerPage -
                  1);
-  _bridgePage = min(_bridgePage, lastBridgePage);
-  _bridgeFocusIndex = _client.bridgeCount() == 0
+  _agentPage = min(_agentPage, lastAgentPage);
+  _agentFocusIndex = _client.agentCount() == 0
                           ? 0
-                          : constrain(_bridgeFocusIndex, 0,
-                                      _client.bridgeCount() - 1);
+                          : constrain(_agentFocusIndex, 0,
+                                      _client.agentCount() - 1);
   if (_client.pairingPending()) {
-    _view = View::Bridges;
+    _view = View::Agents;
   }
-  if (_view == View::Bridges && _client.connected() &&
-      !_client.selectingBridge()) {
+  if (_view == View::Agents && _client.connected() &&
+      !_client.selectingAgent()) {
     _view = View::Threads;
   }
   updateReaderSelection();
@@ -280,13 +280,13 @@ void RemoteApp::handleButtons() {
     }
   } else if (_view == View::Threads) {
     if (bootPressed) {
-      showBridges();
+      showAgents();
     }
     if (powerPressed) {
       if (_client.connected()) {
         createThread();
       } else {
-        showBridges();
+        showAgents();
       }
     }
   } else if (_view == View::Conversation) {
@@ -297,9 +297,9 @@ void RemoteApp::handleButtons() {
     }
   } else {
     if (bootPressed) {
-      backFromBridges();
+      backFromAgents();
     } else if (powerPressed) {
-      confirmBridge();
+      confirmAgent();
     }
   }
 
@@ -344,7 +344,7 @@ void RemoteApp::handleTap(int x, int y) {
   if (_view == View::Threads) {
     if (!_client.connected()) {
       if (y >= 250) {
-        showBridges();
+        showAgents();
       }
       return;
     }
@@ -370,16 +370,16 @@ void RemoteApp::handleTap(int x, int y) {
     openThread(_threadOffset + visibleIndex);
     return;
   }
-  if (_view == View::Bridges) {
+  if (_view == View::Agents) {
     if (_client.pairingPending() || y < 124 || y >= 400) {
       return;
     }
     const int visibleIndex = (y - 124) / 66;
-    if (visibleIndex < 0 || visibleIndex >= kBridgesPerPage) {
+    if (visibleIndex < 0 || visibleIndex >= kAgentsPerPage) {
       return;
     }
-    _bridgeFocusIndex = _bridgePage * kBridgesPerPage + visibleIndex;
-    _client.selectBridge(_bridgeFocusIndex);
+    _agentFocusIndex = _agentPage * kAgentsPerPage + visibleIndex;
+    _client.selectAgent(_agentFocusIndex);
     return;
   }
   if (x < 58 && y >= 56 && y <= 112 && !_recording) {
@@ -402,16 +402,16 @@ void RemoteApp::pageForward() {
     _dirty = true;
     return;
   }
-  if (_view == View::Bridges) {
+  if (_view == View::Agents) {
     const int lastPage =
-        max(0, (_client.bridgeCount() + kBridgesPerPage - 1) /
-                       kBridgesPerPage -
+        max(0, (_client.agentCount() + kAgentsPerPage - 1) /
+                       kAgentsPerPage -
                    1);
-    _bridgePage = min(lastPage, _bridgePage + 1);
-    _bridgeFocusIndex = _client.bridgeCount() == 0
+    _agentPage = min(lastPage, _agentPage + 1);
+    _agentFocusIndex = _client.agentCount() == 0
                             ? 0
-                            : min(_client.bridgeCount() - 1,
-                                  _bridgePage * kBridgesPerPage);
+                            : min(_client.agentCount() - 1,
+                                  _agentPage * kAgentsPerPage);
     _dirty = true;
     return;
   }
@@ -446,12 +446,12 @@ void RemoteApp::pageBack() {
     _dirty = true;
     return;
   }
-  if (_view == View::Bridges) {
-    _bridgePage = max(0, _bridgePage - 1);
-    _bridgeFocusIndex = _client.bridgeCount() == 0
+  if (_view == View::Agents) {
+    _agentPage = max(0, _agentPage - 1);
+    _agentFocusIndex = _client.agentCount() == 0
                             ? 0
-                            : min(_client.bridgeCount() - 1,
-                                  _bridgePage * kBridgesPerPage);
+                            : min(_client.agentCount() - 1,
+                                  _agentPage * kAgentsPerPage);
     _dirty = true;
     return;
   }
@@ -510,13 +510,13 @@ void RemoteApp::backToThreads() {
   _dirty = true;
 }
 
-void RemoteApp::backFromBridges() {
+void RemoteApp::backFromAgents() {
   if (_client.pairingPending()) {
     _client.cancelPairing();
     _dirty = true;
     return;
   }
-  _client.endBridgeSelection();
+  _client.endAgentSelection();
   _view = View::Threads;
   if (_client.connected()) {
     _client.listThreads();
@@ -524,33 +524,38 @@ void RemoteApp::backFromBridges() {
   _dirty = true;
 }
 
-void RemoteApp::showBridges() {
-  _view = View::Bridges;
-  _bridgePage = 0;
-  _client.beginBridgeSelection();
-  _bridgeFocusIndex = 0;
-  for (int index = 0; index < _client.bridgeCount(); index++) {
-    if (_client.bridge(index).selected) {
-      _bridgeFocusIndex = index;
-      _bridgePage = index / kBridgesPerPage;
+void RemoteApp::showAgents() {
+  _view = View::Agents;
+  _agentPage = 0;
+  _dirty = true;
+  draw();
+  _client.beginAgentSelection();
+  _agentFocusIndex = 0;
+  for (int index = 0; index < _client.agentCount(); index++) {
+    if (_client.agent(index).selected) {
+      _agentFocusIndex = index;
+      _agentPage = index / kAgentsPerPage;
       break;
     }
   }
   _dirty = true;
 }
 
-void RemoteApp::confirmBridge() {
+void RemoteApp::confirmAgent() {
   if (_client.pairingPending()) {
     _client.checkPairing();
     return;
   }
-  if (_client.bridgeCount() == 0) {
-    _client.refreshBridges();
+  if (_client.agentCount() == 0) {
+    _client.refreshDiscovery();
+    if (_client.hostCount() > 0) {
+      _client.pairHost(0);
+    }
     return;
   }
-  _bridgeFocusIndex = constrain(_bridgeFocusIndex, 0,
-                                _client.bridgeCount() - 1);
-  _client.selectBridge(_bridgeFocusIndex);
+  _agentFocusIndex = constrain(_agentFocusIndex, 0,
+                               _client.agentCount() - 1);
+  _client.selectAgent(_agentFocusIndex);
 }
 
 void RemoteApp::startRecording() {
@@ -672,7 +677,7 @@ void RemoteApp::draw() {
   } else if (_view == View::Conversation) {
     drawConversation();
   } else {
-    drawBridges();
+    drawAgents();
   }
   Board::flushDisplay();
   _lastDrawMs = millis();
@@ -730,11 +735,11 @@ void RemoteApp::drawHeader() {
   display.setTextColor(kWhite);
   display.setCursor(16, 18);
   String headerName = "Codex Remote";
-  if (_view == View::Bridges) {
-    headerName = "Choose host";
+  if (_view == View::Agents) {
+    headerName = _client.agentCount() > 0 ? "Choose agent" : "Pair host";
   } else if (_view == View::Conversation &&
-             !_client.selectedHostName().isEmpty()) {
-    headerName = _client.selectedHostName();
+             !_client.selectedAgentName().isEmpty()) {
+    headerName = _client.selectedAgentName();
   }
   display.print(headerName.substring(0, 15));
   const bool wifiConnected = WiFi.status() == WL_CONNECTED;
@@ -746,10 +751,10 @@ void RemoteApp::drawThreads() {
   Arduino_GFX &display = Board::display();
   if (!_client.connected()) {
     const bool wifiConnected = WiFi.status() == WL_CONNECTED;
-    const bool macFound = wifiConnected && _client.bridgeCount() > 0;
+    const bool hostFound = wifiConnected && _client.hostCount() > 0;
     drawOrb(display, SCREEN_WIDTH_PX / 2, 142, 55, true);
     drawCenteredText(display,
-                     macFound ? "MAC FOUND"
+                     hostFound ? "HOST FOUND"
                               : (wifiConnected ? "WI-FI READY"
                                                : "JOINING WI-FI"),
                      213, 3,
@@ -768,21 +773,26 @@ void RemoteApp::drawThreads() {
     display.setTextSize(2);
     display.setTextColor(kWhite);
     display.setCursor(103, 294);
-    display.print(macFound ? "Mac found" : "Waiting for Mac");
+    display.print(hostFound ? "Host found" : "Waiting for host");
     display.setTextSize(2);
     display.setTextColor(kMuted);
     display.setCursor(103, 324);
-    if (macFound) {
-      display.print(String(_client.bridgeCount()) +
-                    (_client.bridgeCount() == 1 ? " HOST AVAILABLE"
-                                                : " HOSTS AVAILABLE"));
+    if (_client.agentCount() > 0) {
+      display.print(String(_client.agentCount()) +
+                    (_client.agentCount() == 1 ? " AGENT AVAILABLE"
+                                               : " AGENTS AVAILABLE"));
+    } else if (hostFound) {
+      display.print("NOT PAIRED");
     } else {
-      display.print("OPEN MAC APP");
+      display.print("OPEN DESKTOP APP");
     }
-    display.setCursor(103, 348);
-    display.print(macFound ? "CHOOSE TO PAIR" : "SAME WI-FI");
+    if (!hostFound || _client.agentCount() > 0) {
+      display.setCursor(103, 348);
+      display.print(hostFound ? "CHOOSE AGENT" : "SAME WI-FI");
+    }
     drawChevron(display, 326, 326, kMint);
-    drawFooter("PWR CHOOSE HOST");
+    drawFooter(_client.agentCount() > 0 ? "PWR CHOOSE AGENT"
+                                        : "PWR PAIR HOST");
     return;
   }
 
@@ -845,12 +855,12 @@ void RemoteApp::drawThreads() {
   }
 }
 
-void RemoteApp::drawBridges() {
+void RemoteApp::drawAgents() {
   Arduino_GFX &display = Board::display();
   if (_client.pairingPending()) {
     drawOrb(display, SCREEN_WIDTH_PX / 2, 106, 31, true);
-    drawCenteredText(display, "PAIR WITH MAC", 150, 3, kMint);
-    drawCenteredText(display, _client.selectedBridgeName().substring(0, 26),
+    drawCenteredText(display, "PAIR WITH HOST", 150, 3, kMint);
+    drawCenteredText(display, _client.selectedHostName().substring(0, 26),
                      180, 2, kMuted);
     display.fillRoundRect(24, 208, 320, 137, 18, kPanel);
     display.drawRoundRect(24, 208, 320, 137, 18, kCyan);
@@ -860,16 +870,19 @@ void RemoteApp::drawBridges() {
     const int codeWidth = _client.pairingCode().length() * 24;
     display.setCursor((SCREEN_WIDTH_PX - codeWidth) / 2, 258);
     display.print(_client.pairingCode().substring(0, 6));
-    drawCenteredText(display, "APPROVE IN MAC MENU", 318, 2, kMuted);
+    drawCenteredText(display, "APPROVE IN HOST APP", 318, 2, kMuted);
     drawFooter("PWR CHECK  BOOT CANCEL");
     return;
   }
 
-  const int first = _bridgePage * kBridgesPerPage;
-  const int last = min(_client.bridgeCount(), first + kBridgesPerPage);
-  if (_client.bridgeCount() == 0) {
+  const int first = _agentPage * kAgentsPerPage;
+  const int last = min(_client.agentCount(), first + kAgentsPerPage);
+  if (_client.agentCount() == 0) {
     drawOrb(display, SCREEN_WIDTH_PX / 2, 143, 56, true);
-    drawCenteredText(display, "WAITING FOR MAC", 211, 3, kMint);
+    drawCenteredText(display,
+                     _client.hostCount() > 0 ? "PAIR HOST"
+                                             : "WAITING FOR HOST",
+                     211, 3, kMint);
     display.fillRoundRect(24, 261, 320, 104, 17, kPanel);
     display.drawRoundRect(24, 261, 320, 104, 17, kPanelGlow);
     display.fillCircle(65, 313, 25, 0x0868);
@@ -877,14 +890,16 @@ void RemoteApp::drawBridges() {
     display.setTextSize(2);
     display.setTextColor(kWhite);
     display.setCursor(103, 280);
-    display.print("No hosts yet");
+    display.print(_client.hostCount() > 0 ? "Host found" : "No host yet");
     display.setTextSize(2);
     display.setTextColor(kMuted);
     display.setCursor(103, 310);
-    display.print("OPEN MAC APP");
+    display.print(_client.hostCount() > 0 ? "OPEN PAIRING IN APP"
+                                         : "OPEN DESKTOP APP");
     display.setCursor(103, 336);
     display.print(WiFi.localIP().toString());
-    drawFooter("PWR REFRESH  BOOT BACK");
+    drawFooter(_client.hostCount() > 0 ? "WAITING  BOOT BACK"
+                                       : "PWR REFRESH  BOOT BACK");
     return;
   }
 
@@ -892,35 +907,30 @@ void RemoteApp::drawBridges() {
   display.setTextColor(kMuted);
   display.setCursor(18, 75);
   display.printf("%d-%d / %d AVAILABLE", first + 1, last,
-                 _client.bridgeCount());
-  const bool pairingClosed = _client.status() == "Open pairing on Mac";
-  if (pairingClosed) {
-    drawCenteredText(display, "OPEN PAIRING ON MAC", 96, 2, kCoral);
-  }
-  for (int visible = 0; visible < kBridgesPerPage; visible++) {
+                 _client.agentCount());
+  for (int visible = 0; visible < kAgentsPerPage; visible++) {
     const int index = first + visible;
-    if (index >= _client.bridgeCount()) {
+    if (index >= _client.agentCount()) {
       break;
     }
-    const RemoteBridge &bridge = _client.bridge(index);
+    const RemoteAgent &agent = _client.agent(index);
     const int y = 124 + visible * 66;
     display.fillRoundRect(16, y, 336, 58, 13, kPanel);
     display.drawRoundRect(
         16, y, 336, 58, 13,
-        index == _bridgeFocusIndex
+        index == _agentFocusIndex
             ? kCyan
-            : (bridge.paired ? kPanelGlow : kLine));
-    const uint16_t iconColor = bridge.paired ? kMint : kMuted;
-    display.fillCircle(48, y + 29, 21, bridge.paired ? 0x0868 : 0x1083);
+            : (agent.paired ? kPanelGlow : kLine));
+    const uint16_t iconColor = agent.paired ? kMint : kMuted;
+    display.fillCircle(48, y + 29, 21, agent.paired ? 0x0868 : 0x1083);
     drawHostIcon(display, 48, y + 28, iconColor);
     display.setTextSize(4);
     display.setTextColor(kWhite);
     display.setCursor(80, y + 14);
-    display.print(bridge.name.substring(0, 10));
+    display.print(agent.name.substring(0, 10));
     drawChevron(display, 332, y + 29, kMint);
   }
-  drawFooter(pairingClosed ? "OPEN PAIRING ON MAC"
-                           : "PWR SELECT  BOOT BACK");
+  drawFooter("PWR SELECT  BOOT BACK");
 }
 
 void RemoteApp::drawConversation() {

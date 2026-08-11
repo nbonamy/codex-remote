@@ -17,8 +17,8 @@ void RemoteClient::begin(RemoteClientListener *listener) {
   _deviceId = deviceId;
   _deviceName = "Pocket Remote " + _deviceId.substring(_deviceId.length() - 4);
   loadPairings();
-  if (strlen(SERVER_HOST) == 0 && _selectedBridgeId.startsWith("configured")) {
-    _selectedBridgeId = "";
+  if (strlen(SERVER_HOST) == 0 && _selectedAgentKey.startsWith("configured")) {
+    _selectedAgentKey = "";
     forgetPairing("configured");
   }
 
@@ -38,24 +38,14 @@ void RemoteClient::begin(RemoteClientListener *listener) {
     return;
   }
   MDNS.begin("codex-remote-device");
-  refreshBridges();
-  if (strlen(SERVER_HOST) > 0 && _bridgeCount == 1 &&
-      _selectedBridgeId.isEmpty()) {
-    selectBridge(0);
-  } else if (!_selectedBridgeId.isEmpty()) {
-    connect();
-  } else if (strlen(DEVICE_TOKEN) > 0 && _bridgeCount > 0) {
-    _selectedBridgeId = _bridges[0].id;
-    _selectedBridgeName = _bridges[0].routerName;
-    _selectedRouterId = _bridges[0].routerId;
-    _selectedRouterName = _bridges[0].routerName;
-    _selectedHostId = _bridges[0].hostId;
-    _selectedHostName = _bridges[0].name;
-    _currentToken = DEVICE_TOKEN;
-    saveSelectedBridge();
+  refreshDiscovery();
+  if (strlen(SERVER_HOST) > 0 && _agentCount == 1 &&
+      _selectedAgentKey.isEmpty()) {
+    selectAgent(0);
+  } else if (!_selectedAgentKey.isEmpty()) {
     connect();
   } else {
-    _status = "Select a host";
+    _status = _agentCount > 0 ? "Host found" : "Waiting for host";
     changed();
   }
 }
@@ -71,22 +61,38 @@ void RemoteClient::update() {
     }
     return;
   }
-  if (!_selectingBridge && !_selectedBridgeId.isEmpty() &&
+  if (!_selectingAgent && !_selectedAgentKey.isEmpty() &&
       WiFi.status() == WL_CONNECTED &&
       millis() - _lastConnectAttemptMs >= RECONNECT_INTERVAL_MS) {
     connect();
+    return;
+  }
+  if (_selectingAgent && _selectedAgentKey.isEmpty() && _agentCount == 0 &&
+      _hostCount > 0 &&
+      WiFi.status() == WL_CONNECTED &&
+      millis() - _lastPairingAttemptMs >= PAIRING_RETRY_INTERVAL_MS) {
+    pairHost(0);
+    return;
+  }
+  if (_selectedAgentKey.isEmpty() && WiFi.status() == WL_CONNECTED &&
+      millis() - _lastDiscoveryRefreshMs >= DISCOVERY_REFRESH_INTERVAL_MS) {
+    refreshDiscovery();
+    _status = _hostCount > 0
+                  ? (_selectingAgent ? "Choose an agent" : "Host found")
+                  : (_selectingAgent ? "No agents found" : "Waiting for host");
+    changed();
   }
 }
 
 void RemoteClient::connect() {
   _lastConnectAttemptMs = millis();
-  if (!resolveSelectedBridge()) {
+  if (!resolveSelectedAgent()) {
     _status = "Looking for host";
     changed();
     return;
   }
   if (_currentToken.isEmpty()) {
-    _currentToken = tokenForBridge(_selectedRouterId);
+    _currentToken = tokenForHost(_selectedHostId);
   }
   if (_currentToken.isEmpty()) {
     _status = "Pair this host";
@@ -98,10 +104,10 @@ void RemoteClient::connect() {
   changed();
   configureWebSocket();
   const String path =
-      "/api/v1/hosts/" + _selectedHostId + "/device";
-  Log::client("Remote", "connecting ws://%s:%d%s", _serverHost.c_str(),
+      "/api/v1/agents/" + _selectedAgentId + "/device";
+  Log::client("Remote", "connecting ws://%s:%d%s", _hostAddress.c_str(),
               _serverPort, path.c_str());
-  _connected = _ws.connect(_serverHost, _serverPort, path);
+  _connected = _ws.connect(_hostAddress, _serverPort, path);
   if (!_connected) {
     _status = "Host unavailable";
     changed();
@@ -124,29 +130,31 @@ void RemoteClient::disconnect() {
   _connected = false;
 }
 
-bool RemoteClient::refreshBridges() {
-  _bridgeCount = 0;
+bool RemoteClient::refreshDiscovery() {
+  _lastDiscoveryRefreshMs = millis();
+  _hostCount = 0;
+  _agentCount = 0;
   if (strlen(SERVER_HOST) > 0) {
     Log::client("Remote", "refreshing configured host %s:%d",
                 SERVER_HOST, SERVER_PORT);
-    appendHostsForBridge("configured", "Configured computer", SERVER_HOST,
-                         SERVER_PORT);
-    Log::client("Remote", "configured host returned %d entries", _bridgeCount);
+    appendAgentsForHost("configured", "Configured host", SERVER_HOST,
+                        SERVER_PORT);
+    Log::client("Remote", "configured host returned %d agents", _agentCount);
     changed();
-    return _bridgeCount > 0;
+    return _hostCount > 0;
   }
   const int count = MDNS.queryService("codex-remote", "tcp");
   Log::client("Remote", "mDNS returned %d services", count);
-  String discoveredIds[kMaxBridges];
+  String discoveredIds[kMaxAgents];
   int discoveredCount = 0;
-  for (int index = 0; index < count && _bridgeCount < kMaxBridges; index++) {
-    String routerId = MDNS.txt(index, "bridgeId");
-    if (routerId.isEmpty()) {
-      routerId = "legacy-" + MDNS.hostname(index);
+  for (int index = 0; index < count && _agentCount < kMaxAgents; index++) {
+    String hostId = MDNS.txt(index, "hostId");
+    if (hostId.isEmpty()) {
+      continue;
     }
     bool duplicate = false;
     for (int existing = 0; existing < discoveredCount; existing++) {
-      if (discoveredIds[existing] == routerId) {
+      if (discoveredIds[existing] == hostId) {
         duplicate = true;
         break;
       }
@@ -154,36 +162,42 @@ bool RemoteClient::refreshBridges() {
     if (duplicate) {
       continue;
     }
-    if (discoveredCount < kMaxBridges) {
-      discoveredIds[discoveredCount++] = routerId;
+    if (discoveredCount < kMaxAgents) {
+      discoveredIds[discoveredCount++] = hostId;
     }
-    String routerName = MDNS.txt(index, "bridgeName");
-    if (routerName.isEmpty()) {
-      routerName = MDNS.instanceName(index);
+    String hostName = MDNS.txt(index, "hostName");
+    if (hostName.isEmpty()) {
+      hostName = MDNS.instanceName(index);
     }
-    if (routerName.isEmpty()) {
-      routerName = MDNS.hostname(index);
+    if (hostName.isEmpty()) {
+      hostName = MDNS.hostname(index);
     }
-    appendHostsForBridge(routerId, routerName,
-                         MDNS.address(index).toString(), MDNS.port(index));
+    appendAgentsForHost(hostId, hostName, MDNS.address(index).toString(),
+                        MDNS.port(index));
   }
   changed();
-  return _bridgeCount > 0;
+  return _hostCount > 0;
 }
 
-bool RemoteClient::appendHostsForBridge(const String &routerId,
-                                        const String &routerName,
-                                        const String &serverHost,
-                                        int serverPort) {
-  const String storedToken = tokenForBridge(routerId);
-  String authorizationToken = storedToken;
-  if (authorizationToken.isEmpty() && strlen(DEVICE_TOKEN) > 0) {
-    authorizationToken = DEVICE_TOKEN;
+bool RemoteClient::appendAgentsForHost(const String &hostId,
+                                       const String &hostName,
+                                       const String &hostAddress,
+                                       int serverPort) {
+  if (_hostCount >= kMaxHosts) {
+    return false;
   }
+  const String storedToken = tokenForHost(hostId);
+  RemoteHost &host = _hosts[_hostCount++];
+  host.id = hostId;
+  host.name = hostName;
+  host.address = hostAddress;
+  host.port = serverPort;
+  host.paired = !storedToken.isEmpty();
+  String authorizationToken = storedToken;
   HTTPClient http;
   http.setConnectTimeout(2500);
   http.setTimeout(3000);
-  if (!http.begin(serverHost, serverPort, "/api/v1/hosts")) {
+  if (!http.begin(hostAddress, serverPort, "/api/v1/agents")) {
     return false;
   }
   if (!authorizationToken.isEmpty()) {
@@ -192,123 +206,129 @@ bool RemoteClient::appendHostsForBridge(const String &routerId,
   const int statusCode = http.GET();
   const String responseBody = http.getString();
   http.end();
-  Log::client("Remote", "GET http://%s:%d/api/v1/hosts -> %d (%s)",
-              serverHost.c_str(), serverPort, statusCode,
+  Log::client("Remote", "GET http://%s:%d/api/v1/agents -> %d (%s)",
+              hostAddress.c_str(), serverPort, statusCode,
               responseBody.substring(0, 160).c_str());
+  if (statusCode == HTTP_CODE_UNAUTHORIZED) {
+    if (!storedToken.isEmpty()) {
+      clearRevokedPairing(hostId);
+    }
+    host.paired = false;
+    return true;
+  }
   JsonDocument response;
   if (statusCode != HTTP_CODE_OK || deserializeJson(response, responseBody)) {
     return false;
   }
-
-  const bool reportsAuthorization = response["authorized"].is<bool>();
-  const bool authorized = response["authorized"] | false;
-  if (reportsAuthorization && !storedToken.isEmpty() && !authorized) {
-    clearRevokedPairing(routerId);
-  }
+  host.paired = true;
 
   int added = 0;
-  for (JsonObjectConst item : response["hosts"].as<JsonArrayConst>()) {
-    if (_bridgeCount >= kMaxBridges) {
+  for (JsonObjectConst item : response["agents"].as<JsonArrayConst>()) {
+    if (_agentCount >= kMaxAgents) {
       break;
     }
-    const String hostId = item["id"] | "";
-    if (hostId.isEmpty()) {
+    const String agentId = item["id"] | "";
+    if (agentId.isEmpty()) {
       continue;
     }
-    RemoteBridge &bridge = _bridges[_bridgeCount++];
-    bridge.id = routerId + "|" + hostId;
-    bridge.name = String(item["name"] | hostId);
-    bridge.routerId = routerId;
-    bridge.routerName = routerName;
-    bridge.hostId = hostId;
-    bridge.host = serverHost;
-    bridge.port = serverPort;
-    bridge.paired = reportsAuthorization
-                        ? authorized
-                        : (strlen(DEVICE_TOKEN) > 0 ||
-                           !tokenForBridge(routerId).isEmpty());
-    bridge.selected =
-        bridge.id == _selectedBridgeId ||
-        (added == 0 && routerId == _selectedBridgeId);
+    RemoteAgent &agent = _agents[_agentCount++];
+    agent.key = hostId + "|" + agentId;
+    agent.name = String(item["name"] | agentId);
+    agent.hostId = hostId;
+    agent.hostName = hostName;
+    agent.agentId = agentId;
+    agent.address = hostAddress;
+    agent.port = serverPort;
+    agent.paired = true;
+    agent.selected = agent.key == _selectedAgentKey;
     added++;
   }
-  return added > 0;
+  return true;
 }
 
-bool RemoteClient::applySelectedBridge(const RemoteBridge &bridge) {
-  const bool migratedSelection = _selectedBridgeId == bridge.routerId;
-  _selectedBridgeId = bridge.id;
-  _selectedBridgeName = bridge.routerName;
-  _selectedRouterId = bridge.routerId;
-  _selectedRouterName = bridge.routerName;
-  _selectedHostId = bridge.hostId;
-  _selectedHostName = bridge.name;
-  _serverHost = bridge.host;
-  _serverPort = bridge.port;
-  if (migratedSelection) {
-    saveSelectedBridge();
-  }
-  return !_serverHost.isEmpty() && _serverPort > 0 &&
-         !_selectedHostId.isEmpty();
+bool RemoteClient::applySelectedAgent(const RemoteAgent &agent) {
+  _selectedAgentKey = agent.key;
+  _selectedHostId = agent.hostId;
+  _selectedHostName = agent.hostName;
+  _selectedAgentId = agent.agentId;
+  _selectedAgentName = agent.name;
+  _hostAddress = agent.address;
+  _serverPort = agent.port;
+  return !_hostAddress.isEmpty() && _serverPort > 0 &&
+         !_selectedAgentId.isEmpty();
 }
 
-void RemoteClient::clearRevokedPairing(const String &routerId) {
+void RemoteClient::clearRevokedPairing(const String &hostId) {
   const bool selected =
-      _selectedRouterId == routerId ||
-      _selectedBridgeId.startsWith(routerId + "|") ||
-      _selectedBridgeId == routerId;
+      _selectedHostId == hostId ||
+      _selectedAgentKey.startsWith(hostId + "|");
   if (selected) {
-    _selectedBridgeId = "";
-    _selectedBridgeName = "";
-    _selectedRouterId = "";
-    _selectedRouterName = "";
+    _selectedAgentKey = "";
     _selectedHostId = "";
     _selectedHostName = "";
-    _serverHost = "";
+    _selectedAgentId = "";
+    _selectedAgentName = "";
+    _hostAddress = "";
     _currentToken = "";
-    _selectingBridge = true;
+    _selectingAgent = true;
     _threadCount = 0;
     clearActiveThread();
   }
-  forgetPairing(routerId);
+  forgetPairing(hostId);
   if (selected) {
     _status = "Access revoked";
-    _error = "Choose the Mac to pair again";
+    _error = "Choose the host to pair again";
   }
 }
 
-bool RemoteClient::resolveSelectedBridge() {
-  if (_bridgeCount == 0 && !refreshBridges()) {
+bool RemoteClient::resolveSelectedAgent() {
+  if (_agentCount == 0 && !refreshDiscovery()) {
     return false;
   }
-  for (int index = 0; index < _bridgeCount; index++) {
-    if (_bridges[index].id == _selectedBridgeId ||
-        _bridges[index].routerId == _selectedBridgeId) {
-      return applySelectedBridge(_bridges[index]);
+  for (int index = 0; index < _agentCount; index++) {
+    if (_agents[index].key == _selectedAgentKey) {
+      return applySelectedAgent(_agents[index]);
     }
   }
-  if (!refreshBridges()) {
+  if (!refreshDiscovery()) {
     return false;
   }
-  for (int index = 0; index < _bridgeCount; index++) {
-    if (_bridges[index].id == _selectedBridgeId ||
-        _bridges[index].routerId == _selectedBridgeId) {
-      return applySelectedBridge(_bridges[index]);
+  for (int index = 0; index < _agentCount; index++) {
+    if (_agents[index].key == _selectedAgentKey) {
+      return applySelectedAgent(_agents[index]);
     }
   }
   return false;
 }
 
-void RemoteClient::beginBridgeSelection() {
-  _selectingBridge = true;
+void RemoteClient::beginAgentSelection() {
+  _selectingAgent = true;
   _pairingPending = false;
   _pairingRequestId = "";
   _pairingCode = "";
   _error = "";
+  if (_agentCount > 0) {
+    _status = "Choose an agent";
+    changed();
+    return;
+  }
+  if (_hostCount > 0) {
+    _status = "Contacting host";
+    changed();
+    pairHost(0);
+    return;
+  }
   _status = "Discovering hosts";
   changed();
-  refreshBridges();
-  _status = _bridgeCount > 0 ? "Choose a host" : "No hosts found";
+  refreshDiscovery();
+  if (_agentCount > 0) {
+    _status = "Choose an agent";
+  } else if (_hostCount > 0) {
+    pairHost(0);
+    return;
+  } else {
+    _status = "No hosts found";
+  }
   changed();
 }
 
@@ -319,26 +339,26 @@ void RemoteClient::cancelPairing() {
   _pairingPending = false;
   _pairingRequestId = "";
   _pairingCode = "";
-  _selectingBridge = true;
+  _selectingAgent = true;
   _error = "";
-  _status = "Choose a host";
+  _status = "Choose an agent";
   changed();
-  refreshBridges();
+  refreshDiscovery();
 }
 
-void RemoteClient::endBridgeSelection() {
+void RemoteClient::endAgentSelection() {
   _pairingPending = false;
   _pairingRequestId = "";
   _pairingCode = "";
-  _selectingBridge = false;
+  _selectingAgent = false;
   _error = "";
   if (_connected) {
     _status = "Ready";
     changed();
     return;
   }
-  if (_selectedBridgeId.isEmpty()) {
-    _status = "Select a host";
+  if (_selectedAgentKey.isEmpty()) {
+    _status = "Select an agent";
     changed();
     return;
   }
@@ -353,42 +373,55 @@ bool RemoteClient::checkPairing() {
   return true;
 }
 
-bool RemoteClient::selectBridge(int index) {
-  if (index < 0 || index >= _bridgeCount) {
+bool RemoteClient::selectAgent(int index) {
+  if (index < 0 || index >= _agentCount) {
     return false;
   }
   disconnect();
-  const RemoteBridge &bridge = _bridges[index];
-  _selectedBridgeId = bridge.id;
-  _selectedBridgeName = bridge.routerName;
-  _selectedRouterId = bridge.routerId;
-  _selectedRouterName = bridge.routerName;
-  _selectedHostId = bridge.hostId;
-  _selectedHostName = bridge.name;
-  _serverHost = bridge.host;
-  _serverPort = bridge.port;
-  _currentToken = tokenForBridge(bridge.routerId);
-  if (_currentToken.isEmpty() && bridge.routerId == "configured" &&
-      strlen(DEVICE_TOKEN) > 0) {
-    _currentToken = DEVICE_TOKEN;
-  }
-  saveSelectedBridge();
-  for (int item = 0; item < _bridgeCount; item++) {
-    _bridges[item].selected = item == index;
+  const RemoteAgent &agent = _agents[index];
+  _selectedAgentKey = agent.key;
+  _selectedHostId = agent.hostId;
+  _selectedHostName = agent.hostName;
+  _selectedAgentId = agent.agentId;
+  _selectedAgentName = agent.name;
+  _hostAddress = agent.address;
+  _serverPort = agent.port;
+  _currentToken = tokenForHost(agent.hostId);
+  saveSelectedAgent();
+  for (int item = 0; item < _agentCount; item++) {
+    _agents[item].selected = item == index;
   }
   if (!_currentToken.isEmpty()) {
-    _selectingBridge = false;
+    _selectingAgent = false;
     connect();
     return true;
   }
   return startPairing();
 }
 
+bool RemoteClient::pairHost(int index) {
+  if (index < 0 || index >= _hostCount) {
+    return false;
+  }
+  disconnect();
+  const RemoteHost &host = _hosts[index];
+  _selectedAgentKey = "";
+  _selectedHostId = host.id;
+  _selectedHostName = host.name;
+  _selectedAgentId = "";
+  _selectedAgentName = "";
+  _hostAddress = host.address;
+  _serverPort = host.port;
+  _currentToken = "";
+  return startPairing();
+}
+
 bool RemoteClient::startPairing() {
+  _lastPairingAttemptMs = millis();
   HTTPClient http;
   http.setConnectTimeout(2500);
   http.setTimeout(3000);
-  if (!http.begin(_serverHost, _serverPort, "/api/v1/pairing/requests")) {
+  if (!http.begin(_hostAddress, _serverPort, "/api/v1/pairing/requests")) {
     _status = "Pairing failed";
     _error = "Could not contact host";
     changed();
@@ -409,7 +442,7 @@ bool RemoteClient::startPairing() {
       deserializeJson(response, responseBody);
   if (statusCode != HTTP_CODE_CREATED || parseError) {
     _status = statusCode == HTTP_CODE_FORBIDDEN
-                  ? "Open pairing on Mac"
+                  ? "Open pairing on host"
                   : "Pairing failed";
     _error = parseError ? "Invalid host response"
                         : String(response["error"] | "Try again");
@@ -424,26 +457,27 @@ bool RemoteClient::startPairing() {
     changed();
     return false;
   }
-  const String responseBridgeId = String(response["bridgeId"] | "");
-  const String responseBridgeName = String(response["bridgeName"] | "");
-  if (!responseBridgeId.isEmpty()) {
-    _selectedRouterId = responseBridgeId;
-    if (!responseBridgeName.isEmpty()) {
-      _selectedRouterName = responseBridgeName;
-      _selectedBridgeName = responseBridgeName;
+  const String responseHostId = String(response["hostId"] | "");
+  const String responseHostName = String(response["hostName"] | "");
+  if (!responseHostId.isEmpty()) {
+    _selectedHostId = responseHostId;
+    if (!responseHostName.isEmpty()) {
+      _selectedHostName = responseHostName;
     }
-    _selectedBridgeId = responseBridgeId + "|" + _selectedHostId;
-    for (int index = 0; index < _bridgeCount; index++) {
-      if (_bridges[index].hostId != _selectedHostId) continue;
-      _bridges[index].routerId = responseBridgeId;
-      _bridges[index].routerName = _selectedRouterName;
-      _bridges[index].id = _selectedBridgeId;
+    if (!_selectedAgentId.isEmpty()) {
+      _selectedAgentKey = responseHostId + "|" + _selectedAgentId;
+      for (int index = 0; index < _agentCount; index++) {
+        if (_agents[index].agentId != _selectedAgentId) continue;
+        _agents[index].hostId = responseHostId;
+        _agents[index].hostName = _selectedHostName;
+        _agents[index].key = _selectedAgentKey;
+      }
+      saveSelectedAgent();
     }
-    saveSelectedBridge();
   }
   _pairingPending = true;
   _lastPairingPollMs = millis();
-  _status = "Approve on Mac";
+  _status = "Approve on host";
   _error = "";
   changed();
   return true;
@@ -460,7 +494,7 @@ void RemoteClient::pollPairing() {
   http.setTimeout(3000);
   const String path = "/api/v1/pairing/requests/" + _pairingRequestId +
                       "?deviceId=" + _deviceId;
-  if (!http.begin(_serverHost, _serverPort, path)) {
+  if (!http.begin(_hostAddress, _serverPort, path)) {
     return;
   }
   const int statusCode = http.GET();
@@ -486,15 +520,17 @@ void RemoteClient::pollPairing() {
       changed();
       return;
     }
-    savePairing(_selectedRouterId, _selectedRouterName, token);
+    savePairing(_selectedHostId, _selectedHostName, token);
     _currentToken = token;
     _pairingPending = false;
-    _selectingBridge = false;
+    _selectingAgent = true;
     _pairingRequestId = "";
     _pairingCode = "";
     _status = "Pairing complete";
     changed();
-    connect();
+    refreshDiscovery();
+    _status = _agentCount > 0 ? "Choose an agent" : "No agents found";
+    changed();
     return;
   }
   _pairingPending = false;
@@ -505,9 +541,9 @@ void RemoteClient::pollPairing() {
   changed();
 }
 
-String RemoteClient::tokenForBridge(const String &bridgeId) const {
+String RemoteClient::tokenForHost(const String &hostId) const {
   for (int index = 0; index < _pairingCount; index++) {
-    if (_pairings[index].id == bridgeId) {
+    if (_pairings[index].id == hostId) {
       return _pairings[index].token;
     }
   }
@@ -519,7 +555,7 @@ void RemoteClient::loadPairings() {
   if (!preferences.begin("codexremote", true)) {
     return;
   }
-  _selectedBridgeId = preferences.getString("selected", "");
+  _selectedAgentKey = preferences.getString("selected", "");
   const String serialized = preferences.getString("pairings", "[]");
   preferences.end();
 
@@ -529,7 +565,7 @@ void RemoteClient::loadPairings() {
   }
   _pairingCount = 0;
   for (JsonObjectConst item : document.as<JsonArrayConst>()) {
-    if (_pairingCount >= kMaxBridges) {
+    if (_pairingCount >= kMaxAgents) {
       break;
     }
     const String id = item["id"] | "";
@@ -544,45 +580,53 @@ void RemoteClient::loadPairings() {
   }
 }
 
-void RemoteClient::savePairing(const String &bridgeId,
-                               const String &bridgeName,
+void RemoteClient::savePairing(const String &hostId,
+                               const String &hostName,
                                const String &token) {
   int target = -1;
   for (int index = 0; index < _pairingCount; index++) {
-    if (_pairings[index].id == bridgeId) {
+    if (_pairings[index].id == hostId) {
       target = index;
       break;
     }
   }
-  if (target < 0 && _pairingCount < kMaxBridges) {
+  if (target < 0 && _pairingCount < kMaxAgents) {
     target = _pairingCount++;
   }
   if (target < 0) {
     _error = "Pairing storage is full";
     return;
   }
-  _pairings[target].id = bridgeId;
-  _pairings[target].name = bridgeName;
+  _pairings[target].id = hostId;
+  _pairings[target].name = hostName;
   _pairings[target].token = token;
-  for (int index = 0; index < _bridgeCount; index++) {
-    if (_bridges[index].routerId == bridgeId) {
-      _bridges[index].paired = true;
+  for (int index = 0; index < _agentCount; index++) {
+    if (_agents[index].hostId == hostId) {
+      _agents[index].paired = true;
+    }
+  }
+  for (int index = 0; index < _hostCount; index++) {
+    if (_hosts[index].id == hostId) {
+      _hosts[index].paired = true;
     }
   }
 
   persistPairings();
 }
 
-void RemoteClient::forgetPairing(const String &bridgeId) {
+void RemoteClient::forgetPairing(const String &hostId) {
   int writeIndex = 0;
   for (int readIndex = 0; readIndex < _pairingCount; readIndex++) {
-    if (_pairings[readIndex].id == bridgeId) continue;
+    if (_pairings[readIndex].id == hostId) continue;
     if (writeIndex != readIndex) _pairings[writeIndex] = _pairings[readIndex];
     writeIndex++;
   }
   _pairingCount = writeIndex;
-  for (int index = 0; index < _bridgeCount; index++) {
-    if (_bridges[index].routerId == bridgeId) _bridges[index].paired = false;
+  for (int index = 0; index < _agentCount; index++) {
+    if (_agents[index].hostId == hostId) _agents[index].paired = false;
+  }
+  for (int index = 0; index < _hostCount; index++) {
+    if (_hosts[index].id == hostId) _hosts[index].paired = false;
   }
   persistPairings();
 }
@@ -601,15 +645,15 @@ void RemoteClient::persistPairings() {
   Preferences preferences;
   if (preferences.begin("codexremote", false)) {
     preferences.putString("pairings", serialized);
-    preferences.putString("selected", _selectedBridgeId);
+    preferences.putString("selected", _selectedAgentKey);
     preferences.end();
   }
 }
 
-void RemoteClient::saveSelectedBridge() {
+void RemoteClient::saveSelectedAgent() {
   Preferences preferences;
   if (preferences.begin("codexremote", false)) {
-    preferences.putString("selected", _selectedBridgeId);
+    preferences.putString("selected", _selectedAgentKey);
     preferences.end();
   }
 }
@@ -709,13 +753,13 @@ void RemoteClient::handleMessage(WebsocketsMessage message) {
   }
   const String type = document["type"] | "";
   if (type == "hello") {
-    const String hostId = document["hostId"] | "";
-    const String hostName = document["hostName"] | "";
-    if (!hostId.isEmpty()) {
-      _selectedHostId = hostId;
+    const String agentId = document["agentId"] | "";
+    const String agentName = document["agentName"] | "";
+    if (!agentId.isEmpty()) {
+      _selectedAgentId = agentId;
     }
-    if (!hostName.isEmpty()) {
-      _selectedHostName = hostName;
+    if (!agentName.isEmpty()) {
+      _selectedAgentName = agentName;
     }
     _status = "Ready";
     _error = "";
@@ -746,8 +790,8 @@ void RemoteClient::handleEvent(WebsocketsEvent event, const String &data) {
   } else if (event == WebsocketsEvent::ConnectionClosed) {
     _connected = false;
     if (_ws.getCloseReason() == CloseReason_PolicyViolation) {
-      const String revokedRouterId = _selectedRouterId;
-      clearRevokedPairing(revokedRouterId);
+      const String revokedHostId = _selectedHostId;
+      clearRevokedPairing(revokedHostId);
     } else {
       _status = "Reconnecting";
     }

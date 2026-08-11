@@ -7,15 +7,15 @@ import {
 } from '../src/main/tray-menu';
 
 describe('trayMenuTemplate', () => {
-  it('shows one router with two logical hosts', () => {
+  it('shows one host with two agents', () => {
     const quit = vi.fn();
     const menu = trayMenuTemplate(state(), actions({ quit }));
 
     expect(item(menu, 'Codex Remote: Starting…').enabled).toBe(false);
     expect(item(menu, 'Open Device Simulator').enabled).toBe(false);
-    const hosts = submenu(item(menu, 'Hosts'));
-    expect(item(hosts, 'Codex').submenu).toBeDefined();
-    expect(item(hosts, 'Claw').submenu).toBeDefined();
+    const agents = submenu(item(menu, 'Agents'));
+    expect(item(agents, 'Codex').submenu).toBeDefined();
+    expect(item(agents, 'Claw').submenu).toBeDefined();
     expect(item(menu, 'Quit Codex Remote').click).toBe(quit);
   });
 
@@ -24,9 +24,9 @@ describe('trayMenuTemplate', () => {
     const openPairing = vi.fn();
     const menu = trayMenuTemplate(state({
       phase: 'ready',
-      hosts: [
-        host({ codexStatus: 'ready', accountLabel: 'codex@example.test' }),
-        host({
+      agents: [
+        agent({ codexStatus: 'ready', accountLabel: 'codex@example.test' }),
+        agent({
           id: 'claw',
           name: 'Claw',
           codexHome: '/Users/tester/.codex-claw/codex-home',
@@ -43,7 +43,7 @@ describe('trayMenuTemplate', () => {
     expect(openSimulator).toHaveBeenCalledOnce();
     expect(openPairing).toHaveBeenCalledOnce();
 
-    const claw = submenu(item(submenu(item(menu, 'Hosts')), 'Claw'));
+    const claw = submenu(item(submenu(item(menu, 'Agents')), 'Claw'));
     expect(item(claw, 'Ready').enabled).toBe(false);
     expect(item(claw, 'claw@example.test').enabled).toBe(false);
   });
@@ -85,12 +85,12 @@ describe('trayMenuTemplate', () => {
     expect(revokeDevice).toHaveBeenCalledWith('esp32-a1b2');
   });
 
-  it('keeps the router ready when one Codex host fails', () => {
+  it('keeps the host ready when one Codex agent fails', () => {
     const menu = trayMenuTemplate(state({
       phase: 'ready',
-      hosts: [
-        host({ codexStatus: 'ready' }),
-        host({
+      agents: [
+        agent({ codexStatus: 'ready' }),
+        agent({
           id: 'claw',
           name: 'Claw',
           codexHome: '/Users/tester/.codex-claw/codex-home',
@@ -101,9 +101,9 @@ describe('trayMenuTemplate', () => {
       server: server(),
     }), actions());
 
-    expect(item(menu, 'Codex Remote: Ready · 1/2 hosts').enabled).toBe(false);
+    expect(item(menu, 'Codex Remote: Ready · 1/2 agents').enabled).toBe(false);
     expect(item(menu, 'Open Device Simulator').enabled).toBe(true);
-    const claw = submenu(item(submenu(item(menu, 'Hosts')), 'Claw'));
+    const claw = submenu(item(submenu(item(menu, 'Agents')), 'Claw'));
     expect(item(claw, 'Codex error').enabled).toBe(false);
   });
 });
@@ -114,9 +114,9 @@ function state(
   return {
     phase: 'starting',
     error: null,
-    hosts: [
-      host(),
-      host({
+    agents: [
+      agent(),
+      agent({
         id: 'claw',
         name: 'Claw',
         codexHome: '/Users/tester/.codex-claw/codex-home',
@@ -131,9 +131,9 @@ function state(
   };
 }
 
-function host(
-  patch: Partial<CodexRemoteDesktopState['hosts'][number]> = {},
-): CodexRemoteDesktopState['hosts'][number] {
+function agent(
+  patch: Partial<CodexRemoteDesktopState['agents'][number]> = {},
+): CodexRemoteDesktopState['agents'][number] {
   return {
     id: 'codex',
     name: 'Codex',
@@ -151,7 +151,7 @@ function server(): NonNullable<CodexRemoteDesktopState['server']> {
     defaultCwd: '/tmp/project',
     localUrl: 'http://127.0.0.1:47776',
     networkUrls: [],
-    simulatorUrl: 'http://127.0.0.1:47776/simulator?token=secret&hostId=codex',
+    simulatorUrl: 'http://127.0.0.1:47776/simulator?token=secret&agentId=codex',
     token: 'secret',
   };
 }

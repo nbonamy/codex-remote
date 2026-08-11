@@ -22,36 +22,36 @@ import { readDeviceRecentMessages } from '../server/device-history';
 import { PairingStore } from '../server/pairing-store';
 import {
   CodexRemoteServer,
-  type RemoteCodexHost,
+  type RemoteCodexAgent,
 } from '../server/remote-server';
 import {
-  codexHostProfiles,
-  type CodexRemoteHostProfile,
-} from './host-profiles';
+  codexAgentProfiles,
+  type CodexRemoteAgentProfile,
+} from './agent-profiles';
 import type {
   CodexRemoteDesktopState,
-  CodexRemoteHostState,
+  CodexRemoteAgentState,
 } from './contracts';
 import { synthesizeWithAppleSpeech } from './apple-speech';
 import { trayMenuTemplate } from './tray-menu';
 
 const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAACOSURBVHgBpZLRDYAgEEOrEzgCozCCGzkCbKArOIlugJvgoRAUNcLRpvGH19TkgFQWkqIohhK8UEaKwKcsOg/+WR1vX+AlA74u6q4FqgCOSzwsGHCwbKliAF89Cv89tWmOT4VaVMoVbOBrdQUz+FrD6XItzh4LzYB1HFJ9yrEkZ4l+wvcid9pTssh4UKbPd+4vED2Nd54iAAAAAElFTkSuQmCC';
 
-type HostRuntime = {
-  profile: CodexRemoteHostProfile;
+type AgentRuntime = {
+  profile: CodexRemoteAgentProfile;
   client: CodexAppServerClient;
   surface: CodexSurface;
 };
 
 let tray: Tray | null = null;
-let hostRuntimes: HostRuntime[] = [];
+let agentRuntimes: AgentRuntime[] = [];
 let server: CodexRemoteServer | null = null;
 let pairing: PairingStore | null = null;
 let pairingTimer: NodeJS.Timeout | null = null;
 let desktopState: CodexRemoteDesktopState = {
   phase: 'starting',
   error: null,
-  hosts: [],
+  agents: [],
   pairingOpenUntil: null,
   pairedDeviceCount: 0,
   pairedDevices: [],
@@ -64,13 +64,13 @@ function publishState(patch: Partial<CodexRemoteDesktopState>): void {
   refreshTrayMenu();
 }
 
-function publishHostState(
-  hostId: string,
-  patch: Partial<CodexRemoteHostState>,
+function publishAgentState(
+  agentId: string,
+  patch: Partial<CodexRemoteAgentState>,
 ): void {
   publishState({
-    hosts: desktopState.hosts.map((host) => (
-      host.id === hostId ? { ...host, ...patch } : host
+    agents: desktopState.agents.map((agent) => (
+      agent.id === agentId ? { ...agent, ...patch } : agent
     )),
   });
 }
@@ -136,10 +136,10 @@ function refreshTrayMenu(): void {
 
 async function startServices(): Promise<void> {
   const defaultCwd = process.env.CODEX_REMOTE_CWD?.trim() || join(homedir(), 'src');
-  const profiles = codexHostProfiles(homedir());
+  const profiles = codexAgentProfiles(homedir());
   desktopState = {
     ...desktopState,
-    hosts: profiles.map(initialHostState),
+    agents: profiles.map(initialAgentState),
   };
   refreshTrayMenu();
 
@@ -151,7 +151,7 @@ async function startServices(): Promise<void> {
   pairing.onChange(refreshPairingState);
   refreshPairingState();
 
-  hostRuntimes = profiles.map((profile) => {
+  agentRuntimes = profiles.map((profile) => {
     const transport = profile.transport.type === 'unixSocket'
       ? new CodexAppServerUnixSocketTransport(profile.transport)
       : new CodexAppServerStdioTransport({
@@ -174,7 +174,7 @@ async function startServices(): Promise<void> {
       },
     });
     surface.onStateChange((snapshot) => {
-      publishHostState(profile.id, {
+      publishAgentState(profile.id, {
         codexStatus: snapshot.status,
         accountLabel: snapshot.authentication.account
           ? accountLabel(snapshot.authentication.account)
@@ -185,19 +185,19 @@ async function startServices(): Promise<void> {
     return { profile, client, surface };
   });
 
-  await Promise.all(hostRuntimes.map(async ({ profile, surface }) => {
-    publishHostState(profile.id, { codexStatus: 'connecting', error: null });
+  await Promise.all(agentRuntimes.map(async ({ profile, surface }) => {
+    publishAgentState(profile.id, { codexStatus: 'connecting', error: null });
     try {
       await surface.connect();
     } catch (error) {
-      publishHostState(profile.id, {
+      publishAgentState(profile.id, {
         codexStatus: 'error',
         error: error instanceof Error ? error.message : String(error),
       });
     }
   }));
 
-  const remoteHosts: RemoteCodexHost[] = hostRuntimes.map(({ profile, client, surface }) => ({
+  const remoteAgents: RemoteCodexAgent[] = agentRuntimes.map(({ profile, client, surface }) => ({
     id: profile.id,
     name: profile.name,
     surface,
@@ -208,7 +208,7 @@ async function startServices(): Promise<void> {
     readRecentMessages: (threadId) => readDeviceRecentMessages(client, threadId),
   }));
   server = new CodexRemoteServer({
-    hosts: remoteHosts,
+    agents: remoteAgents,
     token,
     defaultCwd,
     simulatorHtml,
@@ -236,7 +236,7 @@ async function startServices(): Promise<void> {
   });
 }
 
-function initialHostState(profile: CodexRemoteHostProfile): CodexRemoteHostState {
+function initialAgentState(profile: CodexRemoteAgentProfile): CodexRemoteAgentState {
   return {
     id: profile.id,
     name: profile.name,
@@ -336,8 +336,8 @@ app.on('before-quit', () => {
   pairingTimer = null;
   void server?.close();
   server = null;
-  for (const runtime of hostRuntimes) void runtime.surface.close();
-  hostRuntimes = [];
+  for (const runtime of agentRuntimes) void runtime.surface.close();
+  agentRuntimes = [];
   tray?.destroy();
   tray = null;
 });

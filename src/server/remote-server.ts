@@ -49,7 +49,7 @@ export type RemoteServerInfo = {
   realtimeVoiceAvailable: boolean;
 };
 
-export type RemoteCodexHost = {
+export type RemoteCodexAgent = {
   id: string;
   name: string;
   surface: CodexSurface;
@@ -58,14 +58,14 @@ export type RemoteCodexHost = {
 };
 
 export type RemoteServerOptions = {
-  hosts?: RemoteCodexHost[];
+  agents?: RemoteCodexAgent[];
   surface?: CodexSurface;
   token: string;
-  hostId?: string;
-  hostName?: string;
+  agentId?: string;
+  agentName?: string;
   defaultCwd: string;
   simulatorHtml: string;
-  host?: string;
+  listenAddress?: string;
   port?: number;
   advertise?: boolean;
   realtimeBridge?: RemoteRealtimeBridge;
@@ -97,7 +97,7 @@ type DeviceRealtime = {
 type DeviceSession = {
   socket: WebSocket;
   authorizationToken: string;
-  host: RemoteCodexHost;
+  agent: RemoteCodexAgent;
   threadId: string | null;
   audio: AudioCapture | null;
   realtime: DeviceRealtime | null;
@@ -113,8 +113,8 @@ export class CodexRemoteServer {
   });
   private readonly sessions = new Set<DeviceSession>();
   private readonly conversationBroadcastTimers = new Map<string, NodeJS.Timeout>();
-  private readonly hosts: RemoteCodexHost[];
-  private readonly unsubscribeHostListeners: Array<() => void> = [];
+  private readonly agents: RemoteCodexAgent[];
+  private readonly unsubscribeAgentListeners: Array<() => void> = [];
   private bonjour: Bonjour | null = null;
   private mdnsService: ReturnType<Bonjour['publish']> | null = null;
   private mdnsProcess: ChildProcess | null = null;
@@ -123,30 +123,30 @@ export class CodexRemoteServer {
 
   constructor(private readonly options: RemoteServerOptions) {
     if (!options.token.trim()) throw new Error('A non-empty device token is required');
-    this.hosts = options.hosts ?? (options.surface
+    this.agents = options.agents ?? (options.surface
       ? [{
-          id: options.hostId?.trim() || 'codex',
-          name: options.hostName?.trim() || 'Codex',
+          id: options.agentId?.trim() || 'codex',
+          name: options.agentName?.trim() || 'Codex',
           surface: options.surface,
           realtimeVoiceAvailable: options.realtimeVoiceAvailable,
         }]
       : []);
-    if (this.hosts.length === 0) throw new Error('At least one Codex host is required');
-    if (new Set(this.hosts.map((host) => host.id)).size !== this.hosts.length) {
-      throw new Error('Codex host ids must be unique');
+    if (this.agents.length === 0) throw new Error('At least one Codex agent is required');
+    if (new Set(this.agents.map((agent) => agent.id)).size !== this.agents.length) {
+      throw new Error('Codex agent ids must be unique');
     }
     this.httpServer = http.createServer((request, response) => {
       void this.handleHttp(request, response);
     });
     this.httpServer.on('upgrade', (request, socket, head) => {
       const requestUrl = request.url ? new URL(request.url, 'http://localhost') : null;
-      const host = requestUrl ? this.deviceHost(requestUrl.pathname) : null;
+      const agent = requestUrl ? this.deviceAgent(requestUrl.pathname) : null;
       const authorizationToken = requestUrl
         ? requestAuthorizationToken(request, requestUrl)
         : '';
       if (
         !requestUrl
-        || !host
+        || !agent
         || !this.isAuthorized(request, requestUrl, true)
       ) {
         socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
@@ -154,15 +154,15 @@ export class CodexRemoteServer {
         return;
       }
       this.wsServer.handleUpgrade(request, socket, head, (webSocket) => {
-        this.attachDevice(webSocket, host, authorizationToken);
+        this.attachDevice(webSocket, agent, authorizationToken);
       });
     });
-    for (const host of this.hosts) {
-      this.unsubscribeHostListeners.push(
-        host.surface.onStateChange(() => this.broadcastThreads(host.id)),
-        host.surface.onEvent((event) => {
+    for (const agent of this.agents) {
+      this.unsubscribeAgentListeners.push(
+        agent.surface.onStateChange(() => this.broadcastThreads(agent.id)),
+        agent.surface.onEvent((event) => {
           if ('conversationId' in event) {
-            this.scheduleConversationBroadcast(host.id, event.conversationId);
+            this.scheduleConversationBroadcast(agent.id, event.conversationId);
           }
         }),
       );
@@ -171,7 +171,7 @@ export class CodexRemoteServer {
 
   async start(): Promise<RemoteServerInfo> {
     if (this.info) return this.info;
-    const host = this.options.host ?? '0.0.0.0';
+    const listenAddress = this.options.listenAddress ?? '0.0.0.0';
     const requestedPort = this.options.port ?? 47_776;
 
     await new Promise<void>((resolve, reject) => {
@@ -185,7 +185,7 @@ export class CodexRemoteServer {
       };
       this.httpServer.once('error', onError);
       this.httpServer.once('listening', onListening);
-      this.httpServer.listen(requestedPort, host);
+      this.httpServer.listen(requestedPort, listenAddress);
     });
 
     const address = this.httpServer.address();
@@ -203,8 +203,8 @@ export class CodexRemoteServer {
       networkUrls,
       simulatorUrl: `${localUrl}/simulator?token=${
         encodeURIComponent(this.options.token)
-      }&hostId=${encodeURIComponent(this.hosts[0]!.id)}`,
-      realtimeVoiceAvailable: this.hosts.some((host) => this.isRealtimeVoiceAvailable(host)),
+      }&agentId=${encodeURIComponent(this.agents[0]!.id)}`,
+      realtimeVoiceAvailable: this.agents.some((agent) => this.isRealtimeVoiceAvailable(agent)),
     };
 
     if (this.options.advertise !== false && port !== 0) {
@@ -219,7 +219,7 @@ export class CodexRemoteServer {
     return {
       ...this.info,
       networkUrls: [...this.info.networkUrls],
-      realtimeVoiceAvailable: this.hosts.some((host) => this.isRealtimeVoiceAvailable(host)),
+      realtimeVoiceAvailable: this.agents.some((agent) => this.isRealtimeVoiceAvailable(agent)),
     };
   }
 
@@ -233,7 +233,7 @@ export class CodexRemoteServer {
   }
 
   async close(): Promise<void> {
-    for (const unsubscribe of this.unsubscribeHostListeners.splice(0)) unsubscribe();
+    for (const unsubscribe of this.unsubscribeAgentListeners.splice(0)) unsubscribe();
     for (const timer of this.conversationBroadcastTimers.values()) clearTimeout(timer);
     this.conversationBroadcastTimers.clear();
     await Promise.all([...this.sessions].map(async (session) => {
@@ -266,7 +266,7 @@ export class CodexRemoteServer {
           ok: true,
           service: 'codex-remote',
           apiVersion: API_VERSION,
-          hostCount: this.hosts.length,
+          agentCount: this.agents.length,
         });
         return;
       }
@@ -307,8 +307,8 @@ export class CodexRemoteServer {
         && this.options.pairing
       ) {
         sendJson(response, 200, {
-          bridgeId: this.options.pairing.bridgeId,
-          bridgeName: this.options.pairing.bridgeName,
+          hostId: this.options.pairing.hostId,
+          hostName: this.options.pairing.hostName,
           pairingEnabled: this.options.pairing.isPairingOpen(),
         });
         return;
@@ -327,8 +327,8 @@ export class CodexRemoteServer {
         sendJson(response, 201, {
           requestId: pairingRequest.id,
           code: pairingRequest.code,
-          bridgeId: this.options.pairing.bridgeId,
-          bridgeName: this.options.pairing.bridgeName,
+          hostId: this.options.pairing.hostId,
+          hostName: this.options.pairing.hostName,
           expiresAt: new Date(pairingRequest.expiresAt).toISOString(),
         });
         return;
@@ -349,13 +349,16 @@ export class CodexRemoteServer {
         return;
       }
 
-      if (request.method === 'GET' && url.pathname === '/api/v1/hosts') {
+      if (request.method === 'GET' && url.pathname === '/api/v1/agents') {
+        if (!this.isAuthorized(request, url, true)) {
+          sendJson(response, 401, { error: 'Unauthorized' });
+          return;
+        }
         sendJson(response, 200, {
-          authorized: this.isAuthorized(request, url, true),
-          hosts: this.hosts.map((host) => ({
-            id: host.id,
-            name: host.name,
-            status: host.surface.getSnapshot().status,
+          agents: this.agents.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            status: agent.surface.getSnapshot().status,
           })),
         });
         return;
@@ -368,43 +371,43 @@ export class CodexRemoteServer {
         return;
       }
 
-      const route = this.hostRoute(url.pathname);
+      const route = this.agentRoute(url.pathname);
       if (!route) {
-        sendJson(response, 404, { error: 'Unknown host or route' });
+        sendJson(response, 404, { error: 'Unknown agent or route' });
         return;
       }
-      const { host, path } = route;
+      const { agent, path } = route;
 
       if (request.method === 'GET' && path === '/state') {
-        const snapshot = host.surface.getSnapshot();
+        const snapshot = agent.surface.getSnapshot();
         sendJson(response, 200, {
           status: snapshot.status,
           account: snapshot.authentication.account?.type ?? null,
           threadCount: snapshot.conversations.length,
           defaultCwd: this.options.defaultCwd,
-          realtimeVoiceAvailable: this.isRealtimeVoiceAvailable(host),
-          hostId: host.id,
-          hostName: host.name,
+          realtimeVoiceAvailable: this.isRealtimeVoiceAvailable(agent),
+          agentId: agent.id,
+          agentName: agent.name,
         });
         return;
       }
 
       if (request.method === 'GET' && path === '/threads') {
-        const threads = await host.surface.listConversations({ limit: 30 });
+        const threads = await agent.surface.listConversations({ limit: 30 });
         sendJson(response, 200, { threads: toDeviceThreads(threads) });
         return;
       }
 
       if (request.method === 'POST' && path === '/threads') {
         const body = await readJsonBody(request);
-        const snapshot = await host.surface.createConversation({
+        const snapshot = await agent.surface.createConversation({
           cwd: this.options.defaultCwd,
         });
         const threadId = snapshot.activeConversationId;
         if (!threadId) throw new Error('Codex did not return a new thread id');
         const prompt = recordString(body, 'text', false);
-        if (prompt) await this.sendPrompt(host, threadId, prompt);
-        sendJson(response, 201, await this.threadPayload(host, threadId));
+        if (prompt) await this.sendPrompt(agent, threadId, prompt);
+        sendJson(response, 201, await this.threadPayload(agent, threadId));
         return;
       }
 
@@ -412,14 +415,14 @@ export class CodexRemoteServer {
       if (messageMatch) {
         const threadId = decodeURIComponent(messageMatch[1]!);
         if (request.method === 'GET') {
-          sendJson(response, 200, await this.threadPayload(host, threadId));
+          sendJson(response, 200, await this.threadPayload(agent, threadId));
           return;
         }
         if (request.method === 'POST') {
           const body = await readJsonBody(request);
           const prompt = recordString(body, 'text', true);
-          await this.sendPrompt(host, threadId, prompt);
-          sendJson(response, 202, await this.threadPayload(host, threadId));
+          await this.sendPrompt(agent, threadId, prompt);
+          sendJson(response, 202, await this.threadPayload(agent, threadId));
           return;
         }
       }
@@ -427,7 +430,7 @@ export class CodexRemoteServer {
       const interruptMatch = path.match(/^\/threads\/([^/]+)\/interrupt$/);
       if (request.method === 'POST' && interruptMatch) {
         const threadId = decodeURIComponent(interruptMatch[1]!);
-        await host.surface.conversation(threadId).interrupt();
+        await agent.surface.conversation(threadId).interrupt();
         sendJson(response, 202, { ok: true });
         return;
       }
@@ -466,14 +469,14 @@ export class CodexRemoteServer {
   }
 
   private publishBonjour(port: number): void {
-    const name = this.options.pairing?.bridgeName ?? `Codex Remote on ${os.hostname()}`;
+    const name = this.options.pairing?.hostName ?? `Codex Remote on ${os.hostname()}`;
     const txt = {
       api: String(API_VERSION),
-      path: '/api/v1/hosts/{hostId}/device',
+      path: '/api/v1/agents/{agentId}/device',
       ...(this.options.pairing
         ? {
-            bridgeId: this.options.pairing.bridgeId,
-            bridgeName: this.options.pairing.bridgeName,
+            hostId: this.options.pairing.hostId,
+            hostName: this.options.pairing.hostName,
           }
         : {}),
     };
@@ -514,13 +517,13 @@ export class CodexRemoteServer {
 
   private attachDevice(
     socket: WebSocket,
-    host: RemoteCodexHost,
+    agent: RemoteCodexAgent,
     authorizationToken: string,
   ): void {
     const session: DeviceSession = {
       socket,
       authorizationToken,
-      host,
+      agent,
       threadId: null,
       audio: null,
       realtime: null,
@@ -532,9 +535,9 @@ export class CodexRemoteServer {
       type: 'hello',
       apiVersion: API_VERSION,
       platform: process.platform,
-      hostId: host.id,
-      hostName: host.name,
-      transcription: this.isRealtimeVoiceAvailable(host) || this.options.transcribeAudio
+      agentId: agent.id,
+      agentName: agent.name,
+      transcription: this.isRealtimeVoiceAvailable(agent) || this.options.transcribeAudio
         ? 'available'
         : 'unavailable',
     });
@@ -574,7 +577,7 @@ export class CodexRemoteServer {
           this.sendThreads(session);
           return;
         case 'create_thread': {
-          const snapshot = await session.host.surface.createConversation({
+          const snapshot = await session.agent.surface.createConversation({
             cwd: this.options.defaultCwd,
           });
           const threadId = snapshot.activeConversationId;
@@ -582,7 +585,7 @@ export class CodexRemoteServer {
           if (session.threadId !== threadId) await this.releaseRealtime(session);
           session.threadId = threadId;
           await this.sendThread(session, threadId);
-          this.broadcastThreads(session.host.id);
+          this.broadcastThreads(session.agent.id);
           return;
         }
         case 'open_thread':
@@ -594,14 +597,14 @@ export class CodexRemoteServer {
           const threadId = command.threadId ?? session.threadId;
           if (!threadId) throw new Error('Open a thread before sending a command');
           session.threadId = threadId;
-          await this.sendPrompt(session.host, threadId, command.text);
+          await this.sendPrompt(session.agent, threadId, command.text);
           await this.sendThread(session, threadId);
           return;
         }
         case 'interrupt': {
           const threadId = command.threadId ?? session.threadId;
           if (!threadId) throw new Error('Open a thread before interrupting it');
-          await session.host.surface.conversation(threadId).interrupt();
+          await session.agent.surface.conversation(threadId).interrupt();
           return;
         }
         case 'speak_message': {
@@ -618,18 +621,18 @@ export class CodexRemoteServer {
           session.threadId = threadId;
           const sampleRate = command.sampleRate ?? REALTIME_SAMPLE_RATE;
           let realtime: DeviceRealtime | null = null;
-          const realtimeVoiceAvailable = this.isRealtimeVoiceAvailable(session.host);
+          const realtimeVoiceAvailable = this.isRealtimeVoiceAvailable(session.agent);
           if (!realtimeVoiceAvailable && session.realtime) {
             await this.releaseRealtime(session);
           }
-          const realtimeStartupError = this.realtimeStartupErrors.get(session.host.id);
+          const realtimeStartupError = this.realtimeStartupErrors.get(session.agent.id);
           if (realtimeVoiceAvailable && !realtimeStartupError) {
             try {
               realtime = await this.ensureRealtime(session, threadId);
             } catch (error) {
               if (!this.options.transcribeAudio) throw error;
               this.realtimeStartupErrors.set(
-                session.host.id,
+                session.agent.id,
                 error instanceof Error ? error.message : String(error),
               );
             }
@@ -648,7 +651,7 @@ export class CodexRemoteServer {
           } else {
             if (!this.options.transcribeAudio) {
               throw new Error(
-                this.realtimeStartupErrors.get(session.host.id)
+                this.realtimeStartupErrors.get(session.agent.id)
                   ?? (
                     realtimeVoiceAvailable
                       ? 'Speech transcription is unavailable'
@@ -740,7 +743,7 @@ export class CodexRemoteServer {
         status: 'sending',
         detail: 'Sending transcript to Codex',
       });
-      await this.sendPrompt(session.host, session.threadId, text);
+      await this.sendPrompt(session.agent, session.threadId, text);
       return;
     }
     const realtime = session.realtime;
@@ -782,7 +785,7 @@ export class CodexRemoteServer {
     threadId: string,
     messageId: string,
   ): Promise<void> {
-    const payload = await this.threadPayload(session.host, threadId);
+    const payload = await this.threadPayload(session.agent, threadId);
     const message = payload.thread.messages.find((candidate) => candidate.id === messageId);
     if (!message) throw new Error('That message is no longer available on the device');
     if (message.role !== 'assistant') throw new Error('Only assistant replies can be read aloud');
@@ -805,7 +808,7 @@ export class CodexRemoteServer {
       return;
     }
 
-    if (!this.isRealtimeVoiceAvailable(session.host)) {
+    if (!this.isRealtimeVoiceAvailable(session.agent)) {
       throw new Error('Reading replies aloud is unavailable on this desktop');
     }
     const realtime = await this.ensureRealtime(session, threadId);
@@ -818,7 +821,7 @@ export class CodexRemoteServer {
   ): Promise<DeviceRealtime> {
     if (session.realtime?.threadId === threadId) return session.realtime;
     await this.releaseRealtime(session);
-    const conversation = session.host.surface.conversation(threadId);
+    const conversation = session.agent.surface.conversation(threadId);
     await ensureConversationLoaded(conversation);
     let peer: RemoteRealtimePeer | null = null;
     try {
@@ -863,8 +866,8 @@ export class CodexRemoteServer {
     }
   }
 
-  private isRealtimeVoiceAvailable(host: RemoteCodexHost): boolean {
-    return host.realtimeVoiceAvailable?.() ?? true;
+  private isRealtimeVoiceAvailable(agent: RemoteCodexAgent): boolean {
+    return agent.realtimeVoiceAvailable?.() ?? true;
   }
 
   private handleRealtimeEvent(
@@ -929,64 +932,64 @@ export class CodexRemoteServer {
   }
 
   private async sendPrompt(
-    host: RemoteCodexHost,
+    agent: RemoteCodexAgent,
     threadId: string,
     prompt: string,
   ): Promise<void> {
     const text = prompt.trim();
     if (!text) throw new Error('text must be a non-empty string');
     if (text.length > MAX_PROMPT_CHARS) throw new Error('text is too long');
-    const conversation = host.surface.conversation(threadId);
+    const conversation = agent.surface.conversation(threadId);
     await ensureConversationLoaded(conversation);
     await conversation.sendMessage(text);
   }
 
   private async threadPayload(
-    host: RemoteCodexHost,
+    agent: RemoteCodexAgent,
     threadId: string,
   ): Promise<{
     thread: ReturnType<typeof toDeviceThreadState>;
   }> {
-    const snapshot = host.readRecentMessages
-      ? recentThreadSnapshot(host, threadId, await host.readRecentMessages(threadId))
-      : await loadConversationSnapshot(host.surface.conversation(threadId));
+    const snapshot = agent.readRecentMessages
+      ? recentThreadSnapshot(agent, threadId, await agent.readRecentMessages(threadId))
+      : await loadConversationSnapshot(agent.surface.conversation(threadId));
     return {
       thread: toDeviceThreadState(snapshot, threadId),
     };
   }
 
   private sendThreads(session: DeviceSession): void {
-    const snapshot = session.host.surface.getSnapshot();
+    const snapshot = session.agent.surface.getSnapshot();
     this.send(session, {
       type: 'threads',
       threads: toDeviceThreads(snapshot.conversations),
     });
   }
 
-  private broadcastThreads(hostId: string): void {
+  private broadcastThreads(agentId: string): void {
     for (const session of this.sessions) {
-      if (session.host.id === hostId) this.sendThreads(session);
+      if (session.agent.id === agentId) this.sendThreads(session);
     }
   }
 
-  private scheduleConversationBroadcast(hostId: string, threadId: string): void {
-    const key = `${hostId}:${threadId}`;
+  private scheduleConversationBroadcast(agentId: string, threadId: string): void {
+    const key = `${agentId}:${threadId}`;
     if (this.conversationBroadcastTimers.has(key)) return;
     const timer = setTimeout(() => {
       this.conversationBroadcastTimers.delete(key);
-      void this.broadcastConversation(hostId, threadId);
+      void this.broadcastConversation(agentId, threadId);
     }, 80);
     this.conversationBroadcastTimers.set(key, timer);
   }
 
-  private async broadcastConversation(hostId: string, threadId: string): Promise<void> {
-    const host = this.hosts.find((candidate) => candidate.id === hostId);
-    if (!host) return;
+  private async broadcastConversation(agentId: string, threadId: string): Promise<void> {
+    const agent = this.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) return;
     const matching = [...this.sessions].filter((session) => (
-      session.host.id === hostId && session.threadId === threadId
+      session.agent.id === agentId && session.threadId === threadId
     ));
     if (matching.length === 0) return;
-    const conversation = host.surface.conversation(threadId);
+    const conversation = agent.surface.conversation(threadId);
     try {
       const snapshot = await loadConversationSnapshot(conversation);
       const message: DeviceServerMessage = {
@@ -1000,7 +1003,7 @@ export class CodexRemoteServer {
   }
 
   private async sendThread(session: DeviceSession, threadId: string): Promise<void> {
-    const payload = await this.threadPayload(session.host, threadId);
+    const payload = await this.threadPayload(session.agent, threadId);
     this.send(session, { type: 'thread', thread: payload.thread });
   }
 
@@ -1017,36 +1020,36 @@ export class CodexRemoteServer {
     });
   }
 
-  private deviceHost(pathname: string): RemoteCodexHost | null {
-    const match = pathname.match(/^\/api\/v1\/hosts\/([^/]+)\/device$/);
+  private deviceAgent(pathname: string): RemoteCodexAgent | null {
+    const match = pathname.match(/^\/api\/v1\/agents\/([^/]+)\/device$/);
     if (!match) return null;
-    const hostId = decodedPathSegment(match[1]!);
-    return hostId
-      ? this.hosts.find((host) => host.id === hostId) ?? null
+    const agentId = decodedPathSegment(match[1]!);
+    return agentId
+      ? this.agents.find((agent) => agent.id === agentId) ?? null
       : null;
   }
 
-  private hostRoute(pathname: string): {
-    host: RemoteCodexHost;
+  private agentRoute(pathname: string): {
+    agent: RemoteCodexAgent;
     path: string;
   } | null {
-    const match = pathname.match(/^\/api\/v1\/hosts\/([^/]+)(\/.*)$/);
+    const match = pathname.match(/^\/api\/v1\/agents\/([^/]+)(\/.*)$/);
     if (!match) return null;
-    const hostId = decodedPathSegment(match[1]!);
-    if (!hostId) return null;
-    const host = this.hosts.find(
-      (candidate) => candidate.id === hostId,
+    const agentId = decodedPathSegment(match[1]!);
+    if (!agentId) return null;
+    const agent = this.agents.find(
+      (candidate) => candidate.id === agentId,
     );
-    return host ? { host, path: match[2]! } : null;
+    return agent ? { agent, path: match[2]! } : null;
   }
 }
 
 function recentThreadSnapshot(
-  host: RemoteCodexHost,
+  agent: RemoteCodexAgent,
   threadId: string,
   messages: SurfaceMessage[],
 ): CodexSurfaceSnapshot {
-  const snapshot = host.surface.getSnapshot();
+  const snapshot = agent.surface.getSnapshot();
   const summary = snapshot.conversations.find((conversation) => conversation.id === threadId);
   return {
     ...snapshot,

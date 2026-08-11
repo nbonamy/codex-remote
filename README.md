@@ -4,7 +4,7 @@ A pocket remote for local Codex threads.
 
 Codex Remote has two parts:
 
-1. A cross-platform Electron router built on `codex-app-sdk`. It connects to
+1. A cross-platform Electron host app built on `codex-app-sdk`. It connects to
    the desktop-owned Codex app-server control sockets, exposes one
    token-protected LAN HTTP/WebSocket API, advertises one mDNS service, and
    routes push-to-talk audio into Codex.
@@ -19,12 +19,11 @@ This is the fastest way to iterate before the board arrives.
 
 - Thread list: tap a thread to open it; swipe down for the next page and up for
   the previous page.
-- Thread list: press BOOT to create and open a new thread.
-- Thread list: press PWR to disconnect and choose another discovered host.
-- Host list: tap a paired host to reconnect, or tap a new host to request
-  pairing. Confirm the matching six-digit code from the Mac menu-bar app.
-- Entering the Host list disconnects and clears the active host. There is no
-  Back action: tap a host to connect, or press BOOT to rescan.
+- Thread list: press PWR to create and open a new thread.
+- Thread list: press BOOT to disconnect and choose another agent.
+- Agent list: tap a paired agent to reconnect, or tap a new agent to request
+  pairing with its host. Confirm the matching six-digit code from the desktop
+  app.
 - Conversation: hold BOOT to talk; release to transcribe and send to Codex.
 - Conversation: tap the back arrow to return to the thread list.
 - Conversation: swipe down for the next message page and up for the previous
@@ -54,14 +53,13 @@ npm install
 npm run dev
 ```
 
-The app exposes **Codex** through one router using `~/.codex`. Codex must
+The app exposes the **Codex** agent through one host using `~/.codex`. Codex must
 already be running a shared app-server on its Unix control socket; Codex Remote
 connects as a second client and never falls back to a separate child process.
 That is what makes ESP32 prompts appear and stream in the desktop-owned task.
 
 <!-- Codex ADE support is intentionally disabled for now.
-Codex ADE uses `~/.codex-ade` as an independent logical host through the same
-router.
+Codex ADE uses `~/.codex-ade` as an independent agent on the same host.
 -->
 
 Start the matching desktop app with `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1` and
@@ -75,8 +73,8 @@ run its shared server before launching Codex Remote. The expected sockets are:
 ~/.codex-ade/app-server-control/app-server-control.sock
 -->
 
-The router uses port `47776`, one mDNS identity, and one device pairing. Every
-Codex API route includes the host id. `CODEX_REMOTE_PORT` changes the router's
+The host uses port `47776`, one mDNS identity, and one device pairing. Every
+Codex API route includes the agent id. `CODEX_REMOTE_PORT` changes the host's
 single listening port.
 
 Override the defaults for development with:
@@ -118,8 +116,8 @@ short-lived request and polls for explicit approval from the desktop tray.
 HTTP also remains useful for diagnostics, external integrations, and serving
 the HTML simulator.
 
-Host metadata and pairing routes are intentionally unauthenticated so a new
-device can present the available hosts before it is paired. All host-scoped
+Agent metadata and pairing routes are intentionally unauthenticated so a new
+device can present the available agents before its host is paired. All agent-scoped
 Codex routes require `X-Codex-Remote-Token`; a pairing request can only be
 created during the two-minute window opened by **Pair New Device…** in the
 menu-bar app.
@@ -129,14 +127,14 @@ GET  /health
 GET  /api/v1/pairing/info
 POST /api/v1/pairing/requests
 GET  /api/v1/pairing/requests/:id
-GET  /api/v1/hosts
-GET  /api/v1/hosts/:hostId/state
-GET  /api/v1/hosts/:hostId/threads
-GET  /api/v1/hosts/:hostId/threads/:id/messages
-POST /api/v1/hosts/:hostId/threads
-POST /api/v1/hosts/:hostId/threads/:id/messages
-POST /api/v1/hosts/:hostId/threads/:id/interrupt
-WS   /api/v1/hosts/:hostId/device
+GET  /api/v1/agents
+GET  /api/v1/agents/:agentId/state
+GET  /api/v1/agents/:agentId/threads
+GET  /api/v1/agents/:agentId/threads/:id/messages
+POST /api/v1/agents/:agentId/threads
+POST /api/v1/agents/:agentId/threads/:id/messages
+POST /api/v1/agents/:agentId/threads/:id/interrupt
+WS   /api/v1/agents/:agentId/device
 ```
 
 The device WebSocket authenticates with its per-device credential in the same
@@ -156,11 +154,10 @@ cp firmware/waveshare/src/credentials.h.example \
 ```
 
 Fill in the Wi-Fi credentials. Leave `SERVER_HOST` empty to discover Codex
-Remote routers through `_codex-remote._tcp.local`. The firmware reads the host
-list from each router, then presents Codex in **Choose host**.
-<!-- Codex ADE is also presented here when its host profile is enabled. -->
-Pairing authorizes the device once per router, not once per Codex host.
-`DEVICE_TOKEN` is only an optional migration fallback for older builds.
+Remote hosts through `_codex-remote._tcp.local`. The firmware reads the agent
+list from each host, then presents Codex and Claw in **Choose agent**.
+<!-- Codex ADE is also presented here when its agent profile is enabled. -->
+Pairing authorizes the device once per host, not once per Codex agent.
 
 ```bash
 npm run firmware:build

@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 describe('PairingStore', () => {
-  it('persists the bridge identity and per-device credentials', async () => {
+  it('persists the host identity and per-device credentials', async () => {
     const filePath = await pairingFile();
     const store = await PairingStore.open(filePath, 'Codex Remote on studio');
     store.openPairingWindow();
@@ -31,7 +31,7 @@ describe('PairingStore', () => {
     expect(store.isAuthorized(result.token ?? '')).toBe(true);
 
     const reloaded = await PairingStore.open(filePath, 'Codex Remote on studio');
-    expect(reloaded.bridgeId).toBe(store.bridgeId);
+    expect(reloaded.hostId).toBe(store.hostId);
     expect(reloaded.isAuthorized(result.token ?? '')).toBe(true);
     expect(reloaded.pairedDevices()).toMatchObject([{
       id: 'esp32-a1b2',

@@ -28,14 +28,14 @@ export type PublicPairingRequest = Omit<PairingRequest, 'token'>;
 
 type PairingFile = {
   version: 1;
-  bridgeId: string;
-  bridgeName: string;
+  hostId: string;
+  hostName: string;
   devices: PairedDevice[];
 };
 
 export class PairingStore {
-  readonly bridgeId: string;
-  readonly bridgeName: string;
+  readonly hostId: string;
+  readonly hostName: string;
 
   private readonly requests = new Map<string, PairingRequest>();
   private readonly listeners = new Set<() => void>();
@@ -47,36 +47,36 @@ export class PairingStore {
     private readonly filePath: string,
     data: PairingFile,
   ) {
-    this.bridgeId = data.bridgeId;
-    this.bridgeName = data.bridgeName;
+    this.hostId = data.hostId;
+    this.hostName = data.hostName;
     this.devices = data.devices;
   }
 
-  static async open(filePath: string, bridgeName: string): Promise<PairingStore> {
+  static async open(filePath: string, hostName: string): Promise<PairingStore> {
     let data: PairingFile | null = null;
     try {
-      const parsed = JSON.parse(await readFile(filePath, 'utf8')) as Partial<PairingFile>;
+      const parsed = JSON.parse(await readFile(filePath, 'utf8')) as PairingFile;
       if (
         parsed.version === 1
-        && typeof parsed.bridgeId === 'string'
-        && parsed.bridgeId.length > 0
+        && typeof parsed.hostId === 'string'
+        && parsed.hostId.length > 0
         && Array.isArray(parsed.devices)
       ) {
         data = {
           version: 1,
-          bridgeId: parsed.bridgeId,
-          bridgeName,
+          hostId: parsed.hostId,
+          hostName,
           devices: parsed.devices.filter(isPairedDevice),
         };
       }
     } catch {
-      // The first launch, or an unreadable legacy file, creates a fresh identity.
+      // The first launch, or an unreadable file, creates a fresh identity.
     }
 
     const store = new PairingStore(filePath, data ?? {
       version: 1,
-      bridgeId: randomUUID(),
-      bridgeName,
+      hostId: randomUUID(),
+      hostName,
       devices: [],
     });
     await store.persist();
@@ -230,8 +230,8 @@ export class PairingStore {
   private persist(): Promise<void> {
     const payload: PairingFile = {
       version: 1,
-      bridgeId: this.bridgeId,
-      bridgeName: this.bridgeName,
+      hostId: this.hostId,
+      hostName: this.hostName,
       devices: this.devices,
     };
     this.writeQueue = this.writeQueue.then(async () => {

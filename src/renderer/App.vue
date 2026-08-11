@@ -5,29 +5,29 @@ import type { CodexRemoteDesktopState } from '../main/contracts';
 const state = ref<CodexRemoteDesktopState>({
   phase: 'starting',
   error: null,
-  hosts: [],
+  agents: [],
   pairingOpenUntil: null,
   pairedDeviceCount: 0,
   pairedDevices: [],
   pendingPairings: [],
   server: null,
 });
-const selectedHostId = ref<string | null>(null);
+const selectedAgentId = ref<string | null>(null);
 let unsubscribe: () => void = () => undefined;
 
-const activeHost = computed(() => (
-  state.value.hosts.find((host) => host.id === selectedHostId.value)
-  ?? state.value.hosts[0]
+const activeAgent = computed(() => (
+  state.value.agents.find((agent) => agent.id === selectedAgentId.value)
+  ?? state.value.agents[0]
   ?? null
 ));
 const primaryNetworkUrl = computed(() => state.value.server?.networkUrls[0] ?? null);
 
 onMounted(async () => {
   state.value = await window.codexRemote.getState();
-  selectedHostId.value = state.value.hosts[0]?.id ?? null;
+  selectedAgentId.value = state.value.agents[0]?.id ?? null;
   unsubscribe = window.codexRemote.onStateChange((next) => {
     state.value = next;
-    selectedHostId.value ??= next.hosts[0]?.id ?? null;
+    selectedAgentId.value ??= next.agents[0]?.id ?? null;
   });
 });
 
@@ -40,14 +40,14 @@ async function copy(value: string | null | undefined): Promise<void> {
 async function openSimulator(): Promise<void> {
   if (state.value.server) {
     const url = new URL(state.value.server.simulatorUrl);
-    if (activeHost.value) url.searchParams.set('hostId', activeHost.value.id);
+    if (activeAgent.value) url.searchParams.set('agentId', activeAgent.value.id);
     await window.codexRemote.openExternal(url.toString());
   }
 }
 
-function hostStatusLabel(host: CodexRemoteDesktopState['hosts'][number]): string {
-  if (host.codexStatus === 'error') return 'Needs attention';
-  if (host.codexStatus !== 'ready') return 'Starting';
+function agentStatusLabel(agent: CodexRemoteDesktopState['agents'][number]): string {
+  if (agent.codexStatus === 'error') return 'Needs attention';
+  if (agent.codexStatus !== 'ready') return 'Starting';
   return 'Ready for device';
 }
 </script>
@@ -64,24 +64,24 @@ function hostStatusLabel(host: CodexRemoteDesktopState['hosts'][number]): string
       </header>
 
       <div
-        v-for="host in state.hosts"
-        :key="host.id"
+        v-for="agent in state.agents"
+        :key="agent.id"
         class="status-card"
-        :class="[host.codexStatus, { selected: host.id === activeHost?.id }]"
-        @click="selectedHostId = host.id"
+        :class="[agent.codexStatus, { selected: agent.id === activeAgent?.id }]"
+        @click="selectedAgentId = agent.id"
       >
         <span class="status-light" />
         <div>
-          <strong>{{ host.name }} · {{ hostStatusLabel(host) }}</strong>
-          <span>{{ host.accountLabel || 'Codex authentication pending' }}</span>
+          <strong>{{ agent.name }} · {{ agentStatusLabel(agent) }}</strong>
+          <span>{{ agent.accountLabel || 'Codex authentication pending' }}</span>
         </div>
       </div>
 
       <p
-        v-if="state.error || activeHost?.error"
+        v-if="state.error || activeAgent?.error"
         class="error"
       >
-        {{ state.error || activeHost?.error }}
+        {{ state.error || activeAgent?.error }}
       </p>
 
       <div
@@ -115,7 +115,7 @@ function hostStatusLabel(host: CodexRemoteDesktopState['hosts'][number]): string
         <span>Voice path</span>
         <p>
           macOS transcribes 24 kHz PCM locally and sends a normal Codex command.
-          API-key-authenticated hosts can additionally use Codex realtime audio.
+          API-key-authenticated agents can additionally use Codex realtime audio.
         </p>
       </div>
     </section>

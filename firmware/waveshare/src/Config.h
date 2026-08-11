@@ -12,9 +12,6 @@
 #ifndef CODEX_REMOTE_WIFI_PASSWORD
 #define CODEX_REMOTE_WIFI_PASSWORD ""
 #endif
-#ifndef CODEX_REMOTE_DEVICE_TOKEN
-#define CODEX_REMOTE_DEVICE_TOKEN ""
-#endif
 #ifndef CODEX_REMOTE_SERVER_HOST
 #define CODEX_REMOTE_SERVER_HOST ""
 #endif
@@ -27,12 +24,13 @@
 
 constexpr const char *WIFI_SSID = CODEX_REMOTE_WIFI_SSID;
 constexpr const char *WIFI_PASSWORD = CODEX_REMOTE_WIFI_PASSWORD;
-constexpr const char *DEVICE_TOKEN = CODEX_REMOTE_DEVICE_TOKEN;
 constexpr const char *SERVER_HOST = CODEX_REMOTE_SERVER_HOST;
 constexpr int SERVER_PORT = CODEX_REMOTE_SERVER_PORT;
 
 constexpr int WIFI_CONNECT_TIMEOUT_SEC = 15;
 constexpr unsigned long RECONNECT_INTERVAL_MS = 3000;
+constexpr unsigned long DISCOVERY_REFRESH_INTERVAL_MS = 5000;
+constexpr unsigned long PAIRING_RETRY_INTERVAL_MS = 2000;
 
 // The Codex Remote device audio bridge uses mono PCM16LE at 24 kHz.
 constexpr int MIC_SAMPLE_RATE = 24000;

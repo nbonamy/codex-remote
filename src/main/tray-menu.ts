@@ -1,7 +1,7 @@
 import type { MenuItemConstructorOptions } from 'electron';
 import type {
   CodexRemoteDesktopState,
-  CodexRemoteHostState,
+  CodexRemoteAgentState,
 } from './contracts';
 
 export type TrayMenuActions = {
@@ -67,8 +67,8 @@ export function trayMenuTemplate(
       : []),
     { type: 'separator' },
     {
-      label: 'Hosts',
-      submenu: state.hosts.map(hostMenu),
+      label: 'Agents',
+      submenu: state.agents.map(agentMenu),
     },
     { type: 'separator' },
     {
@@ -78,23 +78,23 @@ export function trayMenuTemplate(
   ];
 }
 
-function hostMenu(host: CodexRemoteHostState): MenuItemConstructorOptions {
+function agentMenu(agent: CodexRemoteAgentState): MenuItemConstructorOptions {
   return {
-    label: host.name,
+    label: agent.name,
     submenu: [
       {
-        label: hostStatusLabel(host),
+        label: agentStatusLabel(agent),
         enabled: false,
       },
-      ...(host.accountLabel
+      ...(agent.accountLabel
         ? [{
-            label: host.accountLabel,
+            label: agent.accountLabel,
             enabled: false,
           }]
         : []),
-      ...(host.error
+      ...(agent.error
         ? [{
-            label: host.error,
+            label: agent.error,
             enabled: false,
           }]
         : []),
@@ -105,14 +105,14 @@ function hostMenu(host: CodexRemoteHostState): MenuItemConstructorOptions {
 function overallStatusLabel(state: CodexRemoteDesktopState): string {
   if (state.phase === 'starting') return 'Codex Remote: Starting…';
   if (state.phase === 'error') return 'Codex Remote: Error';
-  const ready = state.hosts.filter((host) => host.codexStatus === 'ready').length;
-  if (ready === state.hosts.length) return 'Codex Remote: Ready';
-  return `Codex Remote: Ready · ${ready}/${state.hosts.length} hosts`;
+  const ready = state.agents.filter((agent) => agent.codexStatus === 'ready').length;
+  if (ready === state.agents.length) return 'Codex Remote: Ready';
+  return `Codex Remote: Ready · ${ready}/${state.agents.length} agents`;
 }
 
-function hostStatusLabel(host: CodexRemoteHostState): string {
-  if (host.codexStatus === 'error') return 'Codex error';
-  if (host.codexStatus === 'connecting' || host.codexStatus === 'idle') {
+function agentStatusLabel(agent: CodexRemoteAgentState): string {
+  if (agent.codexStatus === 'error') return 'Codex error';
+  if (agent.codexStatus === 'connecting' || agent.codexStatus === 'idle') {
     return 'Connecting…';
   }
   return 'Ready';

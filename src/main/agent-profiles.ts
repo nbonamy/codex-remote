@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-export type CodexRemoteHostProfile = {
+export type CodexRemoteAgentProfile = {
   id: 'codex' | 'claw';
   name: string;
   codexHome: string;
@@ -9,10 +9,10 @@ export type CodexRemoteHostProfile = {
     | { type: 'stdio' };
 };
 
-export function codexHostProfiles(homeDirectory: string): CodexRemoteHostProfile[] {
+export function codexAgentProfiles(homeDirectory: string): CodexRemoteAgentProfile[] {
   return [
-    socketHostProfile('codex', 'Codex', join(homeDirectory, '.codex')),
-    managedHostProfile(
+    socketAgentProfile('codex', 'Codex', join(homeDirectory, '.codex')),
+    managedAgentProfile(
       'claw',
       'Claw',
       join(homeDirectory, '.codex-claw', 'codex-home'),
@@ -20,11 +20,11 @@ export function codexHostProfiles(homeDirectory: string): CodexRemoteHostProfile
   ];
 }
 
-function socketHostProfile(
-  id: CodexRemoteHostProfile['id'],
+function socketAgentProfile(
+  id: CodexRemoteAgentProfile['id'],
   name: string,
   codexHome: string,
-): CodexRemoteHostProfile {
+): CodexRemoteAgentProfile {
   return {
     id,
     name,
@@ -36,11 +36,11 @@ function socketHostProfile(
   };
 }
 
-function managedHostProfile(
-  id: CodexRemoteHostProfile['id'],
+function managedAgentProfile(
+  id: CodexRemoteAgentProfile['id'],
   name: string,
   codexHome: string,
-): CodexRemoteHostProfile {
+): CodexRemoteAgentProfile {
   return {
     id,
     name,
