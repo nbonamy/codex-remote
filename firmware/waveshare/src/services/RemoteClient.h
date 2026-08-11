@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include <ArduinoWebsockets.h>
 #include <Preferences.h>
+#include <memory>
 
 struct RemoteThread {
   String id;
@@ -102,7 +103,7 @@ private:
     String token;
   };
 
-  websockets::WebsocketsClient _ws;
+  std::unique_ptr<websockets::WebsocketsClient> _ws;
   RemoteClientListener *_listener = nullptr;
   RemoteThread _threads[kMaxThreads];
   RemoteMessage _messages[kMaxMessages];

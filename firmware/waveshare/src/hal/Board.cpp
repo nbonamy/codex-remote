@@ -138,12 +138,11 @@ void pollPmuButton() {
     pwrPulseUntilMs = 0;
   }
   if (shortPress) {
-    if (negative || positive || pwrPressed) {
-      pwrPressed = false;
-      pwrPulseUntilMs = 0;
-    } else {
-      pwrPulseUntilMs = now + 180;
-    }
+    // The PMU can accumulate press, release, and short-press IRQs while the
+    // main loop is busy with a network request or display flush. Preserve the
+    // completed short press as a pulse even when both edge IRQs are present.
+    pwrPressed = false;
+    pwrPulseUntilMs = now + 180;
   }
   if (longPress && !pwrPressed && !negative && !positive) {
     pwrPulseUntilMs = now + 1200;

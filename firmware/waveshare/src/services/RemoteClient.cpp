@@ -52,7 +52,9 @@ void RemoteClient::begin(RemoteClientListener *listener) {
 
 void RemoteClient::update() {
   if (_connected) {
-    _ws.poll();
+    if (_ws) {
+      _ws->poll();
+    }
     return;
   }
   if (_pairingPending) {
@@ -107,7 +109,7 @@ void RemoteClient::connect() {
       "/api/v1/agents/" + _selectedAgentId + "/device";
   Log::client("Remote", "connecting ws://%s:%d%s", _hostAddress.c_str(),
               _serverPort, path.c_str());
-  _connected = _ws.connect(_hostAddress, _serverPort, path);
+  _connected = _ws && _ws->connect(_hostAddress, _serverPort, path);
   if (!_connected) {
     _status = "Host unavailable";
     changed();
@@ -115,17 +117,21 @@ void RemoteClient::connect() {
 }
 
 void RemoteClient::configureWebSocket() {
-  _ws = WebsocketsClient();
-  _ws.addHeader("X-Codex-Remote-Token", _currentToken);
-  _ws.onMessage([this](WebsocketsMessage message) { handleMessage(message); });
-  _ws.onEvent([this](WebsocketsEvent event, String data) {
+  if (_ws) {
+    _ws->close();
+  }
+  _ws.reset(new WebsocketsClient());
+  _ws->addHeader("X-Codex-Remote-Token", _currentToken);
+  _ws->onMessage([this](WebsocketsMessage message) { handleMessage(message); });
+  _ws->onEvent([this](WebsocketsEvent event, String data) {
     handleEvent(event, data);
   });
 }
 
 void RemoteClient::disconnect() {
-  if (_connected) {
-    _ws.close();
+  if (_ws) {
+    _ws->close();
+    _ws.reset();
   }
   _connected = false;
 }
@@ -686,8 +692,8 @@ bool RemoteClient::startAudio(const String &threadId) {
 }
 
 bool RemoteClient::sendAudio(const uint8_t *data, size_t length) {
-  return _connected &&
-         _ws.sendBinary(reinterpret_cast<const char *>(data), length);
+  return _connected && _ws &&
+         _ws->sendBinary(reinterpret_cast<const char *>(data), length);
 }
 
 bool RemoteClient::endAudio() {
@@ -732,7 +738,7 @@ bool RemoteClient::sendControl(JsonDocument &document) {
   }
   String body;
   serializeJson(document, body);
-  return _ws.send(body);
+  return _ws && _ws->send(body);
 }
 
 void RemoteClient::handleMessage(WebsocketsMessage message) {
@@ -789,7 +795,7 @@ void RemoteClient::handleEvent(WebsocketsEvent event, const String &data) {
     listThreads();
   } else if (event == WebsocketsEvent::ConnectionClosed) {
     _connected = false;
-    if (_ws.getCloseReason() == CloseReason_PolicyViolation) {
+    if (_ws && _ws->getCloseReason() == CloseReason_PolicyViolation) {
       const String revokedHostId = _selectedHostId;
       clearRevokedPairing(revokedHostId);
     } else {

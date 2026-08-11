@@ -620,9 +620,18 @@ void RemoteApp::updateReaderSelection() {
     _awaitingResponse = false;
   }
   if (_awaitingResponse) {
+    if (_client.activeThreadBusy()) {
+      return;
+    }
     for (int index = _client.messageCount() - 1; index >= 0; index--) {
       const RemoteMessage &message = _client.message(index);
-      if (message.role == "assistant" && message.id != _responseBaselineId) {
+      if (!_responseBaselineId.isEmpty() &&
+          message.id == _responseBaselineId) {
+        return;
+      }
+      const bool complete = message.status == "complete" ||
+                            message.status == "completed";
+      if (message.role == "assistant" && complete) {
         _readerMessageId = message.id;
         _readerPage = 0;
         _awaitingResponse = false;

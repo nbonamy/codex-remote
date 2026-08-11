@@ -869,13 +869,19 @@
 
       function selectReaderMessage(messages) {
         if (state.awaitingResponse) {
-          const assistant = [...messages].reverse().find((message) => (
-            message.role === "assistant" && message.id !== state.responseBaselineId
-          ));
-          if (assistant) {
-            state.readerMessageId = assistant.id;
-            state.readerPage = 0;
-            state.awaitingResponse = false;
+          if (state.thread?.busy) return;
+          for (let index = messages.length - 1; index >= 0; index -= 1) {
+            const message = messages[index];
+            if (state.responseBaselineId && message.id === state.responseBaselineId) {
+              return;
+            }
+            const complete = message.status === "complete" || message.status === "completed";
+            if (message.role === "assistant" && complete) {
+              state.readerMessageId = message.id;
+              state.readerPage = 0;
+              state.awaitingResponse = false;
+              return;
+            }
           }
           return;
         }
