@@ -11,6 +11,7 @@ import {
   type NativeImage,
 } from 'electron';
 import {
+  CodexAppServerStdioTransport,
   CodexAppServerUnixSocketTransport,
   CodexSurface,
   transcribeWithAppleSpeechAnalyzer,
@@ -151,11 +152,14 @@ async function startServices(): Promise<void> {
   refreshPairingState();
 
   hostRuntimes = profiles.map((profile) => {
+    const transport = profile.transport.type === 'unixSocket'
+      ? new CodexAppServerUnixSocketTransport(profile.transport)
+      : new CodexAppServerStdioTransport({
+        codexHome: profile.codexHome,
+        cwd: defaultCwd,
+      });
     const client = new CodexAppServerClient(
-      new CodexAppServerUnixSocketTransport({
-        type: 'unixSocket',
-        socketPath: profile.appServerSocketPath,
-      }),
+      transport,
     );
     const surface = new CodexSurface({
       client,
@@ -164,7 +168,7 @@ async function startServices(): Promise<void> {
       autoSelectFirstConversation: false,
       loadingStrategy: 'lazy',
       clientInfo: {
-        name: profile.id === 'codex' ? 'codex_remote' : 'codex_remote_ade',
+        name: profile.id === 'codex' ? 'codex_remote' : `codex_remote_${profile.id}`,
         title: `Codex Remote · ${profile.name}`,
         version: app.getVersion(),
       },

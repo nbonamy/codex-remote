@@ -15,7 +15,7 @@ describe('trayMenuTemplate', () => {
     expect(item(menu, 'Open Device Simulator').enabled).toBe(false);
     const hosts = submenu(item(menu, 'Hosts'));
     expect(item(hosts, 'Codex').submenu).toBeDefined();
-    expect(item(hosts, 'Codex ADE').submenu).toBeDefined();
+    expect(item(hosts, 'Claw').submenu).toBeDefined();
     expect(item(menu, 'Quit Codex Remote').click).toBe(quit);
   });
 
@@ -27,11 +27,11 @@ describe('trayMenuTemplate', () => {
       hosts: [
         host({ codexStatus: 'ready', accountLabel: 'codex@example.test' }),
         host({
-          id: 'codex-ade',
-          name: 'Codex ADE',
-          codexHome: '/Users/tester/.codex-ade',
+          id: 'claw',
+          name: 'Claw',
+          codexHome: '/Users/tester/.codex-claw/codex-home',
           codexStatus: 'ready',
-          accountLabel: 'ade@example.test',
+          accountLabel: 'claw@example.test',
         }),
       ],
       server: server(),
@@ -43,9 +43,9 @@ describe('trayMenuTemplate', () => {
     expect(openSimulator).toHaveBeenCalledOnce();
     expect(openPairing).toHaveBeenCalledOnce();
 
-    const ade = submenu(item(submenu(item(menu, 'Hosts')), 'Codex ADE'));
-    expect(item(ade, 'Ready').enabled).toBe(false);
-    expect(item(ade, 'ade@example.test').enabled).toBe(false);
+    const claw = submenu(item(submenu(item(menu, 'Hosts')), 'Claw'));
+    expect(item(claw, 'Ready').enabled).toBe(false);
+    expect(item(claw, 'claw@example.test').enabled).toBe(false);
   });
 
   it('routes a pairing approval through the unique router', () => {
@@ -91,9 +91,9 @@ describe('trayMenuTemplate', () => {
       hosts: [
         host({ codexStatus: 'ready' }),
         host({
-          id: 'codex-ade',
-          name: 'Codex ADE',
-          codexHome: '/Users/tester/.codex-ade',
+          id: 'claw',
+          name: 'Claw',
+          codexHome: '/Users/tester/.codex-claw/codex-home',
           codexStatus: 'error',
           error: 'failed',
         }),
@@ -103,8 +103,8 @@ describe('trayMenuTemplate', () => {
 
     expect(item(menu, 'Codex Remote: Ready · 1/2 hosts').enabled).toBe(false);
     expect(item(menu, 'Open Device Simulator').enabled).toBe(true);
-    const ade = submenu(item(submenu(item(menu, 'Hosts')), 'Codex ADE'));
-    expect(item(ade, 'Codex error').enabled).toBe(false);
+    const claw = submenu(item(submenu(item(menu, 'Hosts')), 'Claw'));
+    expect(item(claw, 'Codex error').enabled).toBe(false);
   });
 });
 
@@ -117,9 +117,9 @@ function state(
     hosts: [
       host(),
       host({
-        id: 'codex-ade',
-        name: 'Codex ADE',
-        codexHome: '/Users/tester/.codex-ade',
+        id: 'claw',
+        name: 'Claw',
+        codexHome: '/Users/tester/.codex-claw/codex-home',
       }),
     ],
     pairingOpenUntil: null,
