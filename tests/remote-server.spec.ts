@@ -571,6 +571,49 @@ describe('CodexRemoteServer thread history', () => {
     expect(synthesizeSpeech).toHaveBeenCalledWith('This is the stored assistant reply.');
   });
 
+  it('streams synthesized PCM while preserving complete 16-bit samples', async () => {
+    const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
+    const loadedSnapshot = conversationSnapshot();
+    loadedSnapshot.messages = [{
+      id: 'message-assistant',
+      role: 'assistant',
+      status: 'complete',
+      parts: [{ type: 'text', text: 'Stream this reply.' }],
+    }];
+    vi.mocked(conversation.load).mockResolvedValue(loadedSnapshot);
+    const synthesizeSpeech = vi.fn(async () => (async function* () {
+      yield Uint8Array.from([1]);
+      yield Uint8Array.from([2, 3, 4, 5]);
+    }()));
+    const server = new CodexRemoteServer({
+      surface: fakeSurface(conversation),
+      token: 'test-device-token',
+      defaultCwd: '/tmp/project',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+      synthesizeSpeech,
+    });
+    servers.push(server);
+    const info = await server.start();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/agents/codex/device?token=test-device-token`,
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+
+    await messages.nextJson('hello');
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({
+      type: 'speak_message',
+      threadId: 'thread-1',
+      messageId: 'message-assistant',
+    }));
+
+    await expect(messages.nextJson('status')).resolves.toMatchObject({ status: 'speaking' });
+    await expect(messages.nextBinary()).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
   it('refuses to read a user message as an assistant reply', async () => {
     const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
     const loadedSnapshot = conversationSnapshot();

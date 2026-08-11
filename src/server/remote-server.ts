@@ -75,8 +75,11 @@ export type RemoteServerOptions = {
     text: string;
     error?: string;
   }>;
-  synthesizeSpeech?: (text: string) => Promise<Buffer>;
+  synthesizeSpeech?: SpeechSynthesizer;
 };
+
+export type SpeechAudio = Uint8Array | AsyncIterable<Uint8Array>;
+export type SpeechSynthesizer = (text: string) => Promise<SpeechAudio>;
 
 type AudioCapture = {
   byteLength: number;
@@ -104,6 +107,19 @@ type DeviceSession = {
   pending: Promise<void>;
   closed: boolean;
 };
+
+async function* speechAudioChunks(
+  audio: SpeechAudio,
+): AsyncGenerator<Uint8Array> {
+  if (
+    typeof (audio as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]
+      === 'function'
+  ) {
+    yield* audio as AsyncIterable<Uint8Array>;
+    return;
+  }
+  yield audio as Uint8Array;
+}
 
 export class CodexRemoteServer {
   private readonly httpServer: http.Server;
@@ -797,13 +813,9 @@ export class CodexRemoteServer {
       detail: 'Reading the assistant reply',
     });
     if (this.options.synthesizeSpeech) {
-      const pcm = await this.options.synthesizeSpeech(message.text);
-      const playable = pcm.subarray(0, MAX_AUDIO_BYTES - (MAX_AUDIO_BYTES % 2));
-      if (playable.byteLength === 0) throw new Error('Speech synthesis returned no audio');
-      for (let offset = 0; offset < playable.byteLength; offset += 4_800) {
-        if (session.closed || session.socket.readyState !== WebSocket.OPEN) return;
-        session.socket.send(playable.subarray(offset, offset + 4_800));
-      }
+      const audio = await this.options.synthesizeSpeech(message.text);
+      const sent = await this.sendSpeechAudio(session, audio);
+      if (!sent) throw new Error('Speech synthesis returned no audio');
       this.send(session, { type: 'status', status: 'ready' });
       return;
     }
@@ -813,6 +825,42 @@ export class CodexRemoteServer {
     }
     const realtime = await this.ensureRealtime(session, threadId);
     await realtime.handle.appendSpeech(message.text);
+  }
+
+  private async sendSpeechAudio(
+    session: DeviceSession,
+    audio: SpeechAudio,
+  ): Promise<boolean> {
+    let carry: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+    let sentBytes = 0;
+    for await (const value of speechAudioChunks(audio)) {
+      if (session.closed || session.socket.readyState !== WebSocket.OPEN) {
+        return sentBytes > 0;
+      }
+      const chunk = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+      const combined = carry.byteLength > 0
+        ? Buffer.concat([carry, chunk])
+        : chunk;
+      const available = Math.min(
+        combined.byteLength,
+        MAX_AUDIO_BYTES - sentBytes,
+      );
+      const playableLength = available - (available % 2);
+      for (let offset = 0; offset < playableLength; offset += 4_800) {
+        if (session.closed || session.socket.readyState !== WebSocket.OPEN) {
+          return sentBytes > 0;
+        }
+        const frame = combined.subarray(
+          offset,
+          Math.min(offset + 4_800, playableLength),
+        );
+        session.socket.send(frame);
+        sentBytes += frame.byteLength;
+      }
+      if (sentBytes >= MAX_AUDIO_BYTES) break;
+      carry = combined.subarray(playableLength);
+    }
+    return sentBytes > 0;
   }
 
   private async ensureRealtime(

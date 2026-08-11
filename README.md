@@ -85,6 +85,13 @@ CODEX_REMOTE_CWD="$HOME/src" \
 npm run dev
 ```
 
+For substantially better read-aloud audio, copy `.env.example` to the ignored
+`.env.local` file and set `OPENAI_API_KEY`. Codex Remote uses
+`gpt-4o-mini-tts` with the `marin` voice by default and streams raw 24 kHz PCM
+directly to the device. `CODEX_REMOTE_TTS_MODEL`, `CODEX_REMOTE_TTS_VOICE`, and
+`CODEX_REMOTE_TTS_INSTRUCTIONS` override those defaults. If OpenAI cannot
+start a speech request on macOS, the host falls back to Apple speech.
+
 On macOS, push-to-talk uses the Apple SpeechAnalyzer helper packaged by
 `codex-app-sdk`, then sends the transcript as an ordinary Codex text command.
 The ESP32 and host therefore work with the user's normal ChatGPT-authenticated
@@ -98,10 +105,11 @@ transcript and synthesized audio events. The host enables the child
 app-server's `realtime_conversation` feature without modifying the user's
 global Codex configuration or starting an Electron renderer.
 
-Windows and Linux builds can still browse threads and send text, but voice
-currently requires API-key-backed Codex realtime because they do not yet have a
-local transcription backend. The keyless macOS path returns transcripts and
-normal Codex messages; synthesized speaker audio is currently realtime-only.
+Windows and Linux builds can still browse threads and send text, but
+transcription currently requires API-key-backed Codex realtime because they do
+not yet have a local transcription backend. On macOS, read-aloud works with
+Apple speech without a key and uses streamed OpenAI speech when
+`OPENAI_API_KEY` is configured.
 
 The browser simulator asks the browser for microphone access from its loopback
 `http://127.0.0.1` origin. The ESP32 sends the same PCM stream over the
