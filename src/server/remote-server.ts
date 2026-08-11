@@ -351,6 +351,7 @@ export class CodexRemoteServer {
 
       if (request.method === 'GET' && url.pathname === '/api/v1/hosts') {
         sendJson(response, 200, {
+          authorized: this.isAuthorized(request, url, true),
           hosts: this.hosts.map((host) => ({
             id: host.id,
             name: host.name,

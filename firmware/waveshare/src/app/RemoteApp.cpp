@@ -746,9 +746,14 @@ void RemoteApp::drawThreads() {
   Arduino_GFX &display = Board::display();
   if (!_client.connected()) {
     const bool wifiConnected = WiFi.status() == WL_CONNECTED;
+    const bool macFound = wifiConnected && _client.bridgeCount() > 0;
     drawOrb(display, SCREEN_WIDTH_PX / 2, 142, 55, true);
-    drawCenteredText(display, wifiConnected ? "WI-FI READY" : "JOINING WI-FI",
-                     213, 3, wifiConnected ? kMint : kYellow);
+    drawCenteredText(display,
+                     macFound ? "MAC FOUND"
+                              : (wifiConnected ? "WI-FI READY"
+                                               : "JOINING WI-FI"),
+                     213, 3,
+                     wifiConnected ? kMint : kYellow);
     if (wifiConnected) {
       drawCenteredText(display, WiFi.localIP().toString(), 247, 2, kMuted);
     } else if (!_client.error().isEmpty()) {
@@ -763,13 +768,19 @@ void RemoteApp::drawThreads() {
     display.setTextSize(2);
     display.setTextColor(kWhite);
     display.setCursor(103, 294);
-    display.print("Waiting for Mac");
+    display.print(macFound ? "Mac found" : "Waiting for Mac");
     display.setTextSize(2);
     display.setTextColor(kMuted);
     display.setCursor(103, 324);
-    display.print("OPEN MAC APP");
+    if (macFound) {
+      display.print(String(_client.bridgeCount()) +
+                    (_client.bridgeCount() == 1 ? " HOST AVAILABLE"
+                                                : " HOSTS AVAILABLE"));
+    } else {
+      display.print("OPEN MAC APP");
+    }
     display.setCursor(103, 348);
-    display.print("SAME WI-FI");
+    display.print(macFound ? "CHOOSE TO PAIR" : "SAME WI-FI");
     drawChevron(display, 326, 326, kMint);
     drawFooter("PWR CHOOSE HOST");
     return;

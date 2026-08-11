@@ -175,11 +175,19 @@ bool RemoteClient::appendHostsForBridge(const String &routerId,
                                         const String &routerName,
                                         const String &serverHost,
                                         int serverPort) {
+  const String storedToken = tokenForBridge(routerId);
+  String authorizationToken = storedToken;
+  if (authorizationToken.isEmpty() && strlen(DEVICE_TOKEN) > 0) {
+    authorizationToken = DEVICE_TOKEN;
+  }
   HTTPClient http;
   http.setConnectTimeout(2500);
   http.setTimeout(3000);
   if (!http.begin(serverHost, serverPort, "/api/v1/hosts")) {
     return false;
+  }
+  if (!authorizationToken.isEmpty()) {
+    http.addHeader("X-Codex-Remote-Token", authorizationToken);
   }
   const int statusCode = http.GET();
   const String responseBody = http.getString();
@@ -190,6 +198,12 @@ bool RemoteClient::appendHostsForBridge(const String &routerId,
   JsonDocument response;
   if (statusCode != HTTP_CODE_OK || deserializeJson(response, responseBody)) {
     return false;
+  }
+
+  const bool reportsAuthorization = response["authorized"].is<bool>();
+  const bool authorized = response["authorized"] | false;
+  if (reportsAuthorization && !storedToken.isEmpty() && !authorized) {
+    clearRevokedPairing(routerId);
   }
 
   int added = 0;
@@ -209,8 +223,10 @@ bool RemoteClient::appendHostsForBridge(const String &routerId,
     bridge.hostId = hostId;
     bridge.host = serverHost;
     bridge.port = serverPort;
-    bridge.paired = strlen(DEVICE_TOKEN) > 0 ||
-                    !tokenForBridge(routerId).isEmpty();
+    bridge.paired = reportsAuthorization
+                        ? authorized
+                        : (strlen(DEVICE_TOKEN) > 0 ||
+                           !tokenForBridge(routerId).isEmpty());
     bridge.selected =
         bridge.id == _selectedBridgeId ||
         (added == 0 && routerId == _selectedBridgeId);
@@ -234,6 +250,31 @@ bool RemoteClient::applySelectedBridge(const RemoteBridge &bridge) {
   }
   return !_serverHost.isEmpty() && _serverPort > 0 &&
          !_selectedHostId.isEmpty();
+}
+
+void RemoteClient::clearRevokedPairing(const String &routerId) {
+  const bool selected =
+      _selectedRouterId == routerId ||
+      _selectedBridgeId.startsWith(routerId + "|") ||
+      _selectedBridgeId == routerId;
+  if (selected) {
+    _selectedBridgeId = "";
+    _selectedBridgeName = "";
+    _selectedRouterId = "";
+    _selectedRouterName = "";
+    _selectedHostId = "";
+    _selectedHostName = "";
+    _serverHost = "";
+    _currentToken = "";
+    _selectingBridge = true;
+    _threadCount = 0;
+    clearActiveThread();
+  }
+  forgetPairing(routerId);
+  if (selected) {
+    _status = "Access revoked";
+    _error = "Choose the Mac to pair again";
+  }
 }
 
 bool RemoteClient::resolveSelectedBridge() {
@@ -706,17 +747,7 @@ void RemoteClient::handleEvent(WebsocketsEvent event, const String &data) {
     _connected = false;
     if (_ws.getCloseReason() == CloseReason_PolicyViolation) {
       const String revokedRouterId = _selectedRouterId;
-      _selectedBridgeId = "";
-      _selectedBridgeName = "";
-      _selectedRouterId = "";
-      _selectedRouterName = "";
-      _selectedHostId = "";
-      _selectedHostName = "";
-      _currentToken = "";
-      _selectingBridge = true;
-      forgetPairing(revokedRouterId);
-      _status = "Access revoked";
-      _error = "Choose the Mac to pair again";
+      clearRevokedPairing(revokedRouterId);
     } else {
       _status = "Reconnecting";
     }

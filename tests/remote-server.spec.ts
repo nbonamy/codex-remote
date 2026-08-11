@@ -61,6 +61,7 @@ describe('CodexRemoteServer device pairing', () => {
     const baseUrl = `http://127.0.0.1:${info.port}`;
     const response = await fetch(`${baseUrl}/api/v1/hosts`);
     await expect(response.json()).resolves.toEqual({
+      authorized: false,
       hosts: [
         { id: 'codex', name: 'Codex', status: 'ready' },
         { id: 'codex-ade', name: 'Codex ADE', status: 'ready' },
@@ -147,6 +148,11 @@ describe('CodexRemoteServer device pairing', () => {
     const approved = await result.json() as { status: string; token: string };
     expect(approved.status).toBe('approved');
 
+    const authorizedHosts = await fetch(`${baseUrl}/api/v1/hosts`, {
+      headers: { 'X-Codex-Remote-Token': approved.token },
+    });
+    await expect(authorizedHosts.json()).resolves.toMatchObject({ authorized: true });
+
     const socket = new WebSocket(
       `ws://127.0.0.1:${info.port}/api/v1/hosts/codex/device`,
       { headers: { 'X-Codex-Remote-Token': approved.token } },
@@ -164,6 +170,11 @@ describe('CodexRemoteServer device pairing', () => {
     expect(revoked?.token).toBe(approved.token);
     server.disconnectAuthorizationToken(revoked?.token ?? '');
     await expect(closedByRevocation).resolves.toBe(1008);
+
+    const revokedHosts = await fetch(`${baseUrl}/api/v1/hosts`, {
+      headers: { 'X-Codex-Remote-Token': approved.token },
+    });
+    await expect(revokedHosts.json()).resolves.toMatchObject({ authorized: false });
 
     const rejectedSocket = new WebSocket(
       `ws://127.0.0.1:${info.port}/api/v1/hosts/codex/device`,

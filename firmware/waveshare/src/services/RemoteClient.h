@@ -129,6 +129,7 @@ private:
   void disconnect();
   bool resolveSelectedBridge();
   bool applySelectedBridge(const RemoteBridge &bridge);
+  void clearRevokedPairing(const String &routerId);
   bool appendHostsForBridge(const String &routerId,
                             const String &routerName,
                             const String &serverHost, int serverPort);
