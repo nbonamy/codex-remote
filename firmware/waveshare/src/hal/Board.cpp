@@ -259,6 +259,18 @@ bool bootButtonIsPressed() { return digitalRead(BUTTON_A_PIN) == LOW; }
  */
 bool powerButtonIsPressed() { return pwrPressed || millis() < pwrPulseUntilMs; }
 
+void setPowerButtonShutdownEnabled(bool enabled) {
+  if (!pmuReady) {
+    return;
+  }
+  if (enabled) {
+    pmu.setLongPressPowerOFF();
+    pmu.enableLongPressShutdown();
+  } else {
+    pmu.disableLongPressShutdown();
+  }
+}
+
 /**
  * @brief Apply display brightness and cache the requested value.
  * @param brightness Brightness level to apply.

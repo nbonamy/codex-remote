@@ -35,6 +35,7 @@ constexpr int kMessageHeaderCenterY = 165;
 constexpr int kMessageHeaderBaselineY = 172;
 constexpr int kMessageTextBaselineY = 213;
 constexpr int kSwipeThresholdPx = 48;
+constexpr unsigned long kPushToTalkHoldMs = 550;
 constexpr int kNewThreadCardX = 16;
 constexpr int kNewThreadCardY = 368;
 constexpr int kNewThreadCardWidth = 336;
@@ -331,6 +332,7 @@ void RemoteApp::handleButtons() {
   const bool power = Board::powerButtonIsPressed();
   const bool bootPressed = boot && !_bootPrevious;
   const bool powerPressed = power && !_powerPrevious;
+  const bool powerReleased = !power && _powerPrevious;
 
   if (_screenSleeping && (bootPressed || powerPressed)) {
     wakeScreen();
@@ -342,11 +344,32 @@ void RemoteApp::handleButtons() {
     noteActivity();
   }
 
-  if (_recording) {
-    if (bootPressed) {
-      cancelRecording();
-    } else if (powerPressed) {
-      stopRecording();
+  if (_view == View::Conversation) {
+    if (_recording) {
+      if (bootPressed) {
+        cancelRecording();
+      } else if (powerPressed && !_powerTalkCandidate) {
+        stopRecording();
+      } else if (powerReleased && _powerTalkCandidate) {
+        const bool held =
+            millis() - _powerPressStartedMs >= kPushToTalkHoldMs;
+        _powerTalkCandidate = false;
+        _dirty = true;
+        if (held) {
+          stopRecording();
+        }
+      }
+    } else {
+      _powerTalkCandidate = false;
+      if (bootPressed) {
+        backToThreads();
+      } else if (powerPressed && !_awaitingResponse) {
+        startRecording();
+        if (_recording) {
+          _powerTalkCandidate = true;
+          _powerPressStartedMs = millis();
+        }
+      }
     }
   } else if (_view == View::Threads) {
     if (bootPressed) {
@@ -358,12 +381,6 @@ void RemoteApp::handleButtons() {
       } else {
         showAgents();
       }
-    }
-  } else if (_view == View::Conversation) {
-    if (bootPressed) {
-      backToThreads();
-    } else if (powerPressed && !_awaitingResponse) {
-      startRecording();
     }
   } else if (_view == View::Agents) {
     if (bootPressed) {
@@ -820,12 +837,15 @@ void RemoteApp::startRecording() {
     _audio.stopRecording();
     return;
   }
+  Board::setPowerButtonShutdownEnabled(false);
   _recording = true;
   _dirty = true;
 }
 
 void RemoteApp::stopRecording() {
   _recording = false;
+  _powerTalkCandidate = false;
+  Board::setPowerButtonShutdownEnabled(true);
   _audio.stopRecording();
   _ignoreRemoteAudio = false;
   _responseBaselineId = latestAssistantId();
@@ -838,6 +858,8 @@ void RemoteApp::stopRecording() {
 
 void RemoteApp::cancelRecording() {
   _recording = false;
+  _powerTalkCandidate = false;
+  Board::setPowerButtonShutdownEnabled(true);
   _audio.stopRecording();
   _client.cancelAudio();
   _awaitingResponse = false;
@@ -1309,8 +1331,11 @@ void RemoteApp::drawConversation() {
     drawOrb(display, SCREEN_WIDTH_PX / 2, 185, 48, true);
     drawWaveform(display, 306, true);
     drawCenteredText(display, "LISTENING...", 342, 3, kMint);
-    drawCenteredText(display, "PWR SEND  BOOT CANCEL", 375, 2, kWhite);
-    drawFooter("RECORDING");
+    drawCenteredText(display,
+                     _powerTalkCandidate ? "RELEASE TO SEND"
+                                         : "TAP PWR TO SEND",
+                     375, 2, kWhite);
+    drawFooter(_powerTalkCandidate ? "PUSH TO TALK" : "RECORDING");
     return;
   }
 

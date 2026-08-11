@@ -31,6 +31,8 @@ private:
   bool _awaitingResponse = false;
   String _responseBaselineId;
   bool _recording = false;
+  bool _powerTalkCandidate = false;
+  unsigned long _powerPressStartedMs = 0;
   bool _bootPrevious = false;
   bool _powerPrevious = false;
   bool _touchActive = false;

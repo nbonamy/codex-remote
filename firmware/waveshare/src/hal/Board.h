@@ -45,6 +45,9 @@ bool bootButtonIsPressed();
 /// Whether the physical PWR button is currently pressed.
 bool powerButtonIsPressed();
 
+/// Enable or disable the PMU's hardware long-press shutdown behavior.
+void setPowerButtonShutdownEnabled(bool enabled);
+
 /**
  * @brief Set display backlight brightness.
  * @param brightness Backlight level.
