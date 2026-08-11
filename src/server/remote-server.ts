@@ -73,6 +73,7 @@ export type RemoteServerOptions = {
     text: string;
     error?: string;
   }>;
+  synthesizeSpeech?: (text: string) => Promise<Buffer>;
 };
 
 type AudioCapture = {
@@ -600,6 +601,13 @@ export class CodexRemoteServer {
           await session.host.surface.conversation(threadId).interrupt();
           return;
         }
+        case 'speak_message': {
+          const threadId = command.threadId ?? session.threadId;
+          if (!threadId) throw new Error('Open a thread before reading a message');
+          session.threadId = threadId;
+          await this.speakMessage(session, threadId, command.messageId);
+          return;
+        }
         case 'audio_start': {
           const threadId = command.threadId ?? session.threadId;
           if (!threadId) throw new Error('Open a thread before recording');
@@ -764,6 +772,41 @@ export class CodexRemoteServer {
       await this.releaseRealtime(session);
     }
     this.send(session, { type: 'status', status: 'ready' });
+  }
+
+  private async speakMessage(
+    session: DeviceSession,
+    threadId: string,
+    messageId: string,
+  ): Promise<void> {
+    const payload = await this.threadPayload(session.host, threadId);
+    const message = payload.thread.messages.find((candidate) => candidate.id === messageId);
+    if (!message) throw new Error('That message is no longer available on the device');
+    if (message.role !== 'assistant') throw new Error('Only assistant replies can be read aloud');
+    if (!message.text.trim()) throw new Error('That assistant reply has no readable text');
+
+    this.send(session, {
+      type: 'status',
+      status: 'speaking',
+      detail: 'Reading the assistant reply',
+    });
+    if (this.options.synthesizeSpeech) {
+      const pcm = await this.options.synthesizeSpeech(message.text);
+      const playable = pcm.subarray(0, MAX_AUDIO_BYTES - (MAX_AUDIO_BYTES % 2));
+      if (playable.byteLength === 0) throw new Error('Speech synthesis returned no audio');
+      for (let offset = 0; offset < playable.byteLength; offset += 4_800) {
+        if (session.closed || session.socket.readyState !== WebSocket.OPEN) return;
+        session.socket.send(playable.subarray(offset, offset + 4_800));
+      }
+      this.send(session, { type: 'status', status: 'ready' });
+      return;
+    }
+
+    if (!this.isRealtimeVoiceAvailable(session.host)) {
+      throw new Error('Reading replies aloud is unavailable on this desktop');
+    }
+    const realtime = await this.ensureRealtime(session, threadId);
+    await realtime.handle.appendSpeech(message.text);
   }
 
   private async ensureRealtime(

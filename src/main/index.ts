@@ -28,6 +28,7 @@ import type {
   CodexRemoteDesktopState,
   CodexRemoteHostState,
 } from './contracts';
+import { synthesizeWithAppleSpeech } from './apple-speech';
 import { trayMenuTemplate } from './tray-menu';
 
 const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAACOSURBVHgBpZLRDYAgEEOrEzgCozCCGzkCbKArOIlugJvgoRAUNcLRpvGH19TkgFQWkqIohhK8UEaKwKcsOg/+WR1vX+AlA74u6q4FqgCOSzwsGHCwbKliAF89Cv89tWmOT4VaVMoVbOBrdQUz+FrD6XItzh4LzYB1HFJ9yrEkZ4l+wvcid9pTssh4UKbPd+4vED2Nd54iAAAAAElFTkSuQmCC';
@@ -202,6 +203,9 @@ async function startServices(): Promise<void> {
     pairing,
     transcribeAudio: process.platform === 'darwin'
       ? (wave) => transcribeWithAppleSpeechAnalyzer(wave)
+      : undefined,
+    synthesizeSpeech: process.platform === 'darwin'
+      ? synthesizeWithAppleSpeech
       : undefined,
   });
   const info = await server.start();

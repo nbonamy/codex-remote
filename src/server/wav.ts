@@ -31,3 +31,41 @@ export function pcm16LeToWave(
     Buffer.from(pcm.buffer, pcm.byteOffset, dataLength),
   ]);
 }
+
+export function waveToPcm16Le(wave: Uint8Array): Buffer {
+  const bytes = Buffer.from(wave.buffer, wave.byteOffset, wave.byteLength);
+  if (
+    bytes.byteLength < 12
+    || bytes.toString('ascii', 0, 4) !== 'RIFF'
+    || bytes.toString('ascii', 8, 12) !== 'WAVE'
+  ) {
+    throw new Error('Speech synthesizer returned an invalid WAVE file');
+  }
+
+  let formatValid = false;
+  let data: Buffer | null = null;
+  for (let offset = 12; offset + 8 <= bytes.byteLength;) {
+    const type = bytes.toString('ascii', offset, offset + 4);
+    const length = bytes.readUInt32LE(offset + 4);
+    const bodyStart = offset + 8;
+    const bodyEnd = bodyStart + length;
+    if (bodyEnd > bytes.byteLength) {
+      throw new Error('Speech synthesizer returned a truncated WAVE file');
+    }
+    if (type === 'fmt ' && length >= 16) {
+      formatValid = (
+        bytes.readUInt16LE(bodyStart) === 1
+        && bytes.readUInt16LE(bodyStart + 2) === 1
+        && bytes.readUInt32LE(bodyStart + 4) === 24_000
+        && bytes.readUInt16LE(bodyStart + 14) === 16
+      );
+    } else if (type === 'data') {
+      data = bytes.subarray(bodyStart, bodyEnd - (length % 2));
+    }
+    offset = bodyEnd + (length % 2);
+  }
+  if (!formatValid || !data) {
+    throw new Error('Speech synthesizer must return mono 16-bit PCM at 24 kHz');
+  }
+  return Buffer.from(data);
+}

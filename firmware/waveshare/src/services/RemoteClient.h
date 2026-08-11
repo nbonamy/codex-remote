@@ -74,6 +74,7 @@ public:
   bool endAudio();
   bool cancelAudio();
   bool interrupt(const String &threadId);
+  bool speakMessage(const String &threadId, const String &messageId);
   void clearActiveThread();
   void beginBridgeSelection();
   void cancelPairing();

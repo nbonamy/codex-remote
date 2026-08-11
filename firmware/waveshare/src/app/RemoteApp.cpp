@@ -212,6 +212,7 @@ void RemoteApp::update() {
     _audio.advancePlayback();
     if (_audio.playbackIdle()) {
       _playbackActive = false;
+      _dirty = true;
     }
   }
   if (_dirty) {
@@ -225,6 +226,9 @@ void RemoteApp::update() {
 }
 
 void RemoteApp::onRemoteStateChanged() {
+  if (_client.status() == "ready") {
+    _ignoreRemoteAudio = false;
+  }
   const int lastThreadOffset = max(0, _client.threadCount() - kThreadsPerPage);
   _threadOffset = min(_threadOffset, lastThreadOffset);
   const int lastBridgePage =
@@ -248,13 +252,14 @@ void RemoteApp::onRemoteStateChanged() {
 }
 
 void RemoteApp::onRemoteAudio(const uint8_t *data, size_t length) {
-  if (_recording) {
+  if (_recording || _ignoreRemoteAudio) {
     return;
   }
   if (!_playbackActive) {
     _audio.resetPlayback();
     _audio.markPlaybackStarted();
     _playbackActive = true;
+    _dirty = true;
   }
   if (!_audio.queuePlayback(data, length)) {
     Log::client("App", "speaker buffer overflow");
@@ -379,6 +384,12 @@ void RemoteApp::handleTap(int x, int y) {
   }
   if (x < 58 && y >= 56 && y <= 112 && !_recording) {
     backToThreads();
+    return;
+  }
+  if (x >= 16 && x < 352 && y >= kMessageCardY &&
+      y < kMessageCardY + kMessageCardHeight && !_recording &&
+      !_awaitingResponse) {
+    toggleAssistantSpeech();
   }
 }
 
@@ -490,6 +501,9 @@ void RemoteApp::createThread() {
 }
 
 void RemoteApp::backToThreads() {
+  _audio.stopPlayback();
+  _playbackActive = false;
+  _ignoreRemoteAudio = true;
   _view = View::Threads;
   _awaitingResponse = false;
   _client.listThreads();
@@ -545,6 +559,7 @@ void RemoteApp::startRecording() {
   }
   _audio.stopPlayback();
   _playbackActive = false;
+  _ignoreRemoteAudio = true;
   if (!_audio.startRecording()) {
     return;
   }
@@ -559,6 +574,7 @@ void RemoteApp::startRecording() {
 void RemoteApp::stopRecording() {
   _recording = false;
   _audio.stopRecording();
+  _ignoreRemoteAudio = false;
   _responseBaselineId = latestAssistantId();
   _readerMessageId = "";
   _readerPage = 0;
@@ -573,6 +589,22 @@ void RemoteApp::cancelRecording() {
   _client.cancelAudio();
   _awaitingResponse = false;
   _dirty = true;
+}
+
+void RemoteApp::toggleAssistantSpeech() {
+  if (_playbackActive) {
+    _audio.stopPlayback();
+    _playbackActive = false;
+    _ignoreRemoteAudio = true;
+    _dirty = true;
+    return;
+  }
+  const int index = readerMessageIndex();
+  if (index < 0) return;
+  const RemoteMessage &message = _client.message(index);
+  if (message.role != "assistant" || _client.activeThreadId().isEmpty()) return;
+  _ignoreRemoteAudio = false;
+  _client.speakMessage(_client.activeThreadId(), message.id);
 }
 
 void RemoteApp::updateReaderSelection() {
@@ -969,8 +1001,12 @@ void RemoteApp::drawConversation() {
                       kMessageTextBaselineY,
                       kMessageCharactersPerLine, kMessageLinesPerPage,
                       user ? kCyan : kWhite);
-  drawFooter(_playbackActive ? "PLAYING  BOOT BACK"
-                             : "PWR TALK  BOOT BACK");
+  if (!user) {
+    drawFooter(_playbackActive ? "TAP STOP  PWR TALK"
+                               : "TAP READ  PWR TALK");
+  } else {
+    drawFooter("PWR TALK  BOOT BACK");
+  }
 }
 
 void RemoteApp::drawFooter(const char *label) {

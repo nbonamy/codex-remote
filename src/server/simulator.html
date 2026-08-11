@@ -770,6 +770,15 @@
           </div>
         `;
         screen.querySelector(".back-button")?.addEventListener("click", backToThreads);
+        screen.querySelector(".message-page.assistant")?.addEventListener("click", () => {
+          const current = readerSelection(messages);
+          if (!current) return;
+          send({
+            type: "speak_message",
+            threadId: thread.id,
+            messageId: current.message.id,
+          });
+        });
       }
 
       function renderReaderPage(selection) {

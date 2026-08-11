@@ -41,6 +41,7 @@ export type DeviceClientCommand =
   | { type: 'open_thread'; threadId: string }
   | { type: 'send_text'; threadId?: string; text: string }
   | { type: 'interrupt'; threadId?: string }
+  | { type: 'speak_message'; threadId?: string; messageId: string }
   | { type: 'audio_start'; threadId?: string; sampleRate?: number }
   | { type: 'audio_end' }
   | { type: 'audio_cancel' };
@@ -59,7 +60,7 @@ export type DeviceServerMessage =
   | { type: 'transcript'; role: string; text: string }
   | {
     type: 'status';
-    status: 'ready' | 'recording' | 'transcribing' | 'sending';
+    status: 'ready' | 'recording' | 'transcribing' | 'sending' | 'speaking';
     detail?: string;
   }
   | { type: 'error'; message: string };
@@ -129,6 +130,12 @@ export function parseDeviceCommand(value: unknown): DeviceClientCommand {
       return {
         type: value.type,
         ...(optionalString(value.threadId) ? { threadId: optionalString(value.threadId) } : {}),
+      };
+    case 'speak_message':
+      return {
+        type: value.type,
+        ...(optionalString(value.threadId) ? { threadId: optionalString(value.threadId) } : {}),
+        messageId: requiredString(value.messageId, 'messageId'),
       };
     case 'audio_start': {
       const sampleRate = value.sampleRate === undefined

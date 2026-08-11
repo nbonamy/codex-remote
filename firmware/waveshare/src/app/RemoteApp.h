@@ -37,6 +37,7 @@ private:
   int16_t _touchLastX = 0;
   int16_t _touchLastY = 0;
   bool _playbackActive = false;
+  bool _ignoreRemoteAudio = false;
   bool _dirty = true;
   unsigned long _lastDrawMs = 0;
   String _serialCommand;
@@ -56,6 +57,7 @@ private:
   void startRecording();
   void stopRecording();
   void cancelRecording();
+  void toggleAssistantSpeech();
   void updateReaderSelection();
   int readerMessageIndex() const;
   int messagePageCount(const RemoteMessage &message) const;

@@ -624,6 +624,15 @@ bool RemoteClient::interrupt(const String &threadId) {
   return sendControl(document);
 }
 
+bool RemoteClient::speakMessage(const String &threadId,
+                                const String &messageId) {
+  JsonDocument document;
+  document["type"] = "speak_message";
+  document["threadId"] = threadId;
+  document["messageId"] = messageId;
+  return sendControl(document);
+}
+
 void RemoteClient::clearActiveThread() {
   _activeThreadId = "";
   _activeThreadTitle = "";

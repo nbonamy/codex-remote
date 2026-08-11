@@ -26,6 +26,19 @@ describe('device protocol', () => {
     expect(parseDeviceCommand({ type: 'audio_cancel' })).toStrictEqual({
       type: 'audio_cancel',
     });
+    expect(parseDeviceCommand({
+      type: 'speak_message',
+      threadId: 'thread-1',
+      messageId: 'message-1',
+    })).toStrictEqual({
+      type: 'speak_message',
+      threadId: 'thread-1',
+      messageId: 'message-1',
+    });
+    expect(() => parseDeviceCommand({
+      type: 'speak_message',
+      messageId: '',
+    })).toThrow('messageId must be a non-empty string');
     expect(() => parseDeviceCommand({
       type: 'send_text',
       text: '',
