@@ -42,10 +42,14 @@ private:
   bool _ignoreRemoteAudio = false;
   bool _autoReadReplies = false;
   uint8_t _displayBrightness = DEFAULT_BRIGHTNESS;
+  uint8_t _autoSleepIndex = 2;
   int _settingsFocusIndex = 0;
+  bool _screenSleeping = false;
+  bool _touchWakeConsumed = false;
   bool _dirty = true;
   unsigned long _lastDrawMs = 0;
   unsigned long _lastTelemetryRefreshMs = 0;
+  unsigned long _lastInteractionMs = 0;
   String _serialCommand;
 
   void handleButtons();
@@ -65,6 +69,12 @@ private:
   void activateSettingsFocus();
   void toggleAutoRead();
   void cycleDisplayBrightness();
+  void cycleAutoSleep();
+  void noteActivity();
+  void updateAutoSleep();
+  void sleepScreen();
+  void wakeScreen();
+  bool autoSleepBlocked() const;
   void loadSettings();
   void persistSettings();
   void startRecording();

@@ -410,7 +410,7 @@
         grid-template-columns: 34px minmax(0, 1fr) auto;
         gap: 12px;
         align-items: center;
-        min-height: 92px;
+        min-height: 80px;
         padding: 13px 15px;
         border: 1px solid var(--line);
         border-radius: 16px;
@@ -434,7 +434,7 @@
 
       .setting-title {
         display: block;
-        font-size: 16px;
+        font-size: 14px;
         font-weight: 780;
       }
 
@@ -653,6 +653,10 @@
         brightnessIndex: Math.min(
           2,
           Math.max(0, Number(localStorage.getItem("codex-remote-brightness") || "0")),
+        ),
+        autoSleepIndex: Math.min(
+          3,
+          Math.max(0, Number(localStorage.getItem("codex-remote-auto-sleep") || "2")),
         ),
       };
 
@@ -907,6 +911,13 @@
               </span>
               <span class="setting-toggle on">${[35, 65, 100][state.brightnessIndex]}%</span>
             </button>
+            <button class="setting-card ${state.settingsFocusIndex === 2 ? "selected" : ""}" id="auto-sleep-setting" type="button">
+              <span class="setting-icon" aria-hidden="true">◒</span>
+              <span>
+                <span class="setting-title">Auto-sleep</span>
+              </span>
+              <span class="setting-toggle ${state.autoSleepIndex === 0 ? "" : "on"}">${["OFF", "1 MIN", "2 MIN", "5 MIN"][state.autoSleepIndex]}</span>
+            </button>
           </div>
         `;
         screen.querySelector("#auto-read-setting")?.addEventListener("click", () => {
@@ -916,6 +927,10 @@
         screen.querySelector("#brightness-setting")?.addEventListener("click", () => {
           state.settingsFocusIndex = 1;
           cycleBrightness();
+        });
+        screen.querySelector("#auto-sleep-setting")?.addEventListener("click", () => {
+          state.settingsFocusIndex = 2;
+          cycleAutoSleep();
         });
       }
 
@@ -944,8 +959,15 @@
         render();
       }
 
+      function cycleAutoSleep() {
+        state.autoSleepIndex = (state.autoSleepIndex + 1) % 4;
+        localStorage.setItem("codex-remote-auto-sleep", String(state.autoSleepIndex));
+        render();
+      }
+
       function activateSettingsFocus() {
-        if (state.settingsFocusIndex === 1) cycleBrightness();
+        if (state.settingsFocusIndex === 2) cycleAutoSleep();
+        else if (state.settingsFocusIndex === 1) cycleBrightness();
         else toggleAutoRead();
       }
 
@@ -1077,7 +1099,7 @@
 
       function pageForward() {
         if (state.view === "settings") {
-          state.settingsFocusIndex = 1;
+          state.settingsFocusIndex = Math.min(2, state.settingsFocusIndex + 1);
           render();
           return;
         }
@@ -1109,7 +1131,7 @@
 
       function pageBack() {
         if (state.view === "settings") {
-          state.settingsFocusIndex = 0;
+          state.settingsFocusIndex = Math.max(0, state.settingsFocusIndex - 1);
           render();
           return;
         }

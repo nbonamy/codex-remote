@@ -45,6 +45,9 @@ constexpr int kThreadCardWidth = 336;
 constexpr int kThreadCardHeight = 60;
 constexpr int kThreadCardPitch = 66;
 constexpr uint8_t kBrightnessLevels[] = {90, 165, 255};
+constexpr unsigned long kAutoSleepTimeoutsMs[] = {0, 60000, 120000, 300000};
+constexpr const char *kAutoSleepLabels[] = {"OFF", "1 MIN", "2 MIN", "5 MIN"};
+constexpr int kSettingsCount = 3;
 constexpr int kStatusPillX = 232;
 constexpr int kStatusPillY = 7;
 constexpr int kStatusPillWidth = 124;
@@ -130,6 +133,12 @@ void drawSettingsGear(Arduino_GFX &display, int x, int y, uint16_t color) {
   display.drawLine(x + 5, y + 5, x + 7, y + 7, color);
   display.drawLine(x + 5, y - 5, x + 7, y - 7, color);
   display.drawLine(x - 7, y + 7, x - 5, y + 5, color);
+}
+
+void drawMoon(Arduino_GFX &display, int x, int y, uint16_t color,
+              uint16_t background) {
+  display.fillCircle(x, y, 11, color);
+  display.fillCircle(x + 5, y - 4, 10, background);
 }
 
 void drawBatteryIcon(Arduino_GFX &display, int x, int y) {
@@ -234,6 +243,7 @@ bool RemoteApp::begin() {
   }
   _client.begin(this);
   loadSettings();
+  _lastInteractionMs = millis();
   _dirty = true;
   return true;
 }
@@ -255,6 +265,7 @@ void RemoteApp::update() {
       _dirty = true;
     }
   }
+  updateAutoSleep();
   if (millis() - _lastTelemetryRefreshMs >=
       TELEMETRY_REFRESH_INTERVAL_MS) {
     _lastTelemetryRefreshMs = millis();
@@ -288,6 +299,9 @@ void RemoteApp::onRemoteStateChanged() {
   if (_client.pairingPending()) {
     _view = View::Agents;
   }
+  if (_client.pairingPending() || _client.activeThreadBusy()) {
+    wakeScreen();
+  }
   if (_view == View::Agents && _client.connected() &&
       !_client.selectingAgent()) {
     _view = View::Threads;
@@ -301,6 +315,7 @@ void RemoteApp::onRemoteAudio(const uint8_t *data, size_t length) {
     return;
   }
   if (!_playbackActive) {
+    wakeScreen();
     _audio.resetPlayback();
     _audio.markPlaybackStarted();
     _playbackActive = true;
@@ -316,6 +331,16 @@ void RemoteApp::handleButtons() {
   const bool power = Board::powerButtonIsPressed();
   const bool bootPressed = boot && !_bootPrevious;
   const bool powerPressed = power && !_powerPrevious;
+
+  if (_screenSleeping && (bootPressed || powerPressed)) {
+    wakeScreen();
+    _bootPrevious = boot;
+    _powerPrevious = power;
+    return;
+  }
+  if (bootPressed || powerPressed) {
+    noteActivity();
+  }
 
   if (_recording) {
     if (bootPressed) {
@@ -361,8 +386,21 @@ void RemoteApp::handleButtons() {
 void RemoteApp::handleTouch() {
   Board::TouchPoint point;
   const bool pressed = Board::readTouch(point);
+  if (_screenSleeping) {
+    if (pressed) {
+      wakeScreen();
+      _touchActive = true;
+      _touchWakeConsumed = true;
+      _touchStartX = point.x;
+      _touchStartY = point.y;
+      _touchLastX = point.x;
+      _touchLastY = point.y;
+    }
+    return;
+  }
   if (pressed) {
     if (!_touchActive) {
+      noteActivity();
       _touchActive = true;
       _touchStartX = point.x;
       _touchStartY = point.y;
@@ -376,6 +414,10 @@ void RemoteApp::handleTouch() {
   }
 
   _touchActive = false;
+  if (_touchWakeConsumed) {
+    _touchWakeConsumed = false;
+    return;
+  }
   const int dx = _touchLastX - _touchStartX;
   const int dy = _touchLastY - _touchStartY;
   if (abs(dy) >= kSwipeThresholdPx && abs(dy) > abs(dx) * 6 / 5) {
@@ -403,12 +445,15 @@ void RemoteApp::handleTap(int x, int y) {
     return;
   }
   if (_view == View::Settings) {
-    if (y >= 105 && y < 210) {
+    if (y >= 96 && y < 178) {
       _settingsFocusIndex = 0;
       toggleAutoRead();
-    } else if (y >= 226 && y < 331) {
+    } else if (y >= 187 && y < 269) {
       _settingsFocusIndex = 1;
       cycleDisplayBrightness();
+    } else if (y >= 278 && y < 360) {
+      _settingsFocusIndex = 2;
+      cycleAutoSleep();
     }
     return;
   }
@@ -466,7 +511,7 @@ void RemoteApp::handleTap(int x, int y) {
 
 void RemoteApp::pageForward() {
   if (_view == View::Settings) {
-    _settingsFocusIndex = 1;
+    _settingsFocusIndex = min(kSettingsCount - 1, _settingsFocusIndex + 1);
     _dirty = true;
     return;
   }
@@ -510,7 +555,7 @@ void RemoteApp::pageForward() {
 
 void RemoteApp::pageBack() {
   if (_view == View::Settings) {
-    _settingsFocusIndex = 0;
+    _settingsFocusIndex = max(0, _settingsFocusIndex - 1);
     _dirty = true;
     return;
   }
@@ -659,7 +704,9 @@ void RemoteApp::toggleAutoRead() {
 }
 
 void RemoteApp::activateSettingsFocus() {
-  if (_settingsFocusIndex == 1) {
+  if (_settingsFocusIndex == 2) {
+    cycleAutoSleep();
+  } else if (_settingsFocusIndex == 1) {
     cycleDisplayBrightness();
   } else {
     toggleAutoRead();
@@ -680,6 +727,55 @@ void RemoteApp::cycleDisplayBrightness() {
   _dirty = true;
 }
 
+void RemoteApp::cycleAutoSleep() {
+  _autoSleepIndex = (_autoSleepIndex + 1) % 4;
+  noteActivity();
+  persistSettings();
+  _dirty = true;
+}
+
+void RemoteApp::noteActivity() {
+  _lastInteractionMs = millis();
+}
+
+bool RemoteApp::autoSleepBlocked() const {
+  return _recording || _playbackActive || _awaitingResponse ||
+         _client.pairingPending() || _client.activeThreadBusy();
+}
+
+void RemoteApp::updateAutoSleep() {
+  if (autoSleepBlocked()) {
+    noteActivity();
+    if (_screenSleeping) {
+      wakeScreen();
+    }
+    return;
+  }
+  const unsigned long timeout = kAutoSleepTimeoutsMs[_autoSleepIndex];
+  if (!_screenSleeping && timeout > 0 &&
+      millis() - _lastInteractionMs >= timeout) {
+    sleepScreen();
+  }
+}
+
+void RemoteApp::sleepScreen() {
+  if (_screenSleeping || autoSleepBlocked()) {
+    return;
+  }
+  _screenSleeping = true;
+  Board::setDisplayBrightness(BRIGHTNESS_OFF);
+}
+
+void RemoteApp::wakeScreen() {
+  noteActivity();
+  if (!_screenSleeping) {
+    return;
+  }
+  _screenSleeping = false;
+  Board::setDisplayBrightness(_displayBrightness);
+  _dirty = true;
+}
+
 void RemoteApp::loadSettings() {
   Preferences preferences;
   if (preferences.begin("codexremote", true)) {
@@ -692,6 +788,9 @@ void RemoteApp::loadSettings() {
         break;
       }
     }
+    _autoSleepIndex =
+        min(static_cast<uint8_t>(3),
+            preferences.getUChar("auto_sleep", 2));
     preferences.end();
   }
   Board::setDisplayBrightness(_displayBrightness);
@@ -702,6 +801,7 @@ void RemoteApp::persistSettings() {
   if (preferences.begin("codexremote", false)) {
     preferences.putBool("auto_read", _autoReadReplies);
     preferences.putUChar("brightness", _displayBrightness);
+    preferences.putUChar("auto_sleep", _autoSleepIndex);
     preferences.end();
   }
 }
@@ -780,6 +880,7 @@ void RemoteApp::updateReaderSelection() {
       const bool complete = message.status == "complete" ||
                             message.status == "completed";
       if (message.role == "assistant" && complete) {
+        wakeScreen();
         _readerMessageId = message.id;
         _readerPage = 0;
         _awaitingResponse = false;
@@ -876,6 +977,13 @@ void RemoteApp::handleSerialDebug() {
     }
     if (_serialCommand == "$SCREENSHOT") {
       Board::writeDisplayScreenshot(Serial);
+    } else if (_serialCommand == "$SLEEP") {
+      sleepScreen();
+    } else if (_serialCommand == "$WAKE") {
+      wakeScreen();
+    } else if (_serialCommand == "$SCREEN_STATE") {
+      Serial.printf("CODEX_REMOTE_SCREEN_STATE %s\n",
+                    _screenSleeping ? "sleeping" : "awake");
     } else if (_serialCommand == "$PAGE_BACK") {
       pageBack();
     } else if (_serialCommand == "$PAGE_FORWARD") {
@@ -885,7 +993,11 @@ void RemoteApp::handleSerialDebug() {
       if (separator > 5) {
         const int x = _serialCommand.substring(5, separator).toInt();
         const int y = _serialCommand.substring(separator + 1).toInt();
-        handleTap(x, y);
+        if (_screenSleeping) {
+          wakeScreen();
+        } else {
+          handleTap(x, y);
+        }
       }
     }
     _serialCommand = "";
@@ -1114,49 +1226,59 @@ void RemoteApp::drawSettings() {
   display.setCursor(18, 75);
   display.print("QUICK SETTINGS");
 
-  display.fillRoundRect(16, 105, 336, 105, 18, kPanel);
-  display.drawRoundRect(16, 105, 336, 105, 18,
+  display.fillRoundRect(16, 96, 336, 82, 16, kPanel);
+  display.drawRoundRect(16, 96, 336, 82, 16,
                         _settingsFocusIndex == 0 ? kCyan : kLine);
-  display.fillCircle(52, 157, 25, 0x0868);
-  drawSpark(display, 52, 157, 11, kMint);
+  display.fillCircle(52, 137, 23, 0x0868);
+  drawSpark(display, 52, 137, 11, kMint);
 
-  display.setFont(u8g2_font_helvB18_tf);
+  display.setFont(u8g2_font_helvB14_tf);
   display.setTextSize(1);
   display.setTextColor(kWhite);
-  display.setCursor(88, 147);
+  display.setCursor(88, 143);
   display.print("AUTO-READ");
   display.setFont();
-  display.setTextSize(2);
-  display.setTextColor(kMuted);
-  display.setCursor(88, 176);
-  display.print("NEW REPLIES");
 
   const uint16_t toggleColor = _autoReadReplies ? kMint : kLine;
-  display.fillRoundRect(268, 138, 67, 38, 19, toggleColor);
-  display.fillCircle(_autoReadReplies ? 316 : 287, 157, 14,
+  display.fillRoundRect(276, 120, 60, 34, 17, toggleColor);
+  display.fillCircle(_autoReadReplies ? 319 : 293, 137, 12,
                      _autoReadReplies ? kPanel : kMuted);
 
-  display.fillRoundRect(16, 226, 336, 105, 18, kPanel);
-  display.drawRoundRect(16, 226, 336, 105, 18,
+  display.fillRoundRect(16, 187, 336, 82, 16, kPanel);
+  display.drawRoundRect(16, 187, 336, 82, 16,
                         _settingsFocusIndex == 1 ? kCyan : kLine);
-  display.fillCircle(52, 278, 25, 0x0868);
-  drawSettingsGear(display, 52, 278, kMint);
-  display.setFont(u8g2_font_helvB18_tf);
+  display.fillCircle(52, 228, 23, 0x0868);
+  drawSettingsGear(display, 52, 228, kMint);
+  display.setFont(u8g2_font_helvB14_tf);
   display.setTextSize(1);
   display.setTextColor(kWhite);
-  display.setCursor(88, 268);
+  display.setCursor(88, 234);
   display.print("BRIGHTNESS");
   display.setFont();
-  display.setTextSize(2);
-  display.setTextColor(kMuted);
-  display.setCursor(88, 297);
-  display.print("DISPLAY");
   const int brightnessPercent =
       (static_cast<int>(_displayBrightness) * 100 + 127) / 255;
+  const String brightnessLabel = String(brightnessPercent) + "%";
   display.setTextSize(3);
   display.setTextColor(kMint);
-  display.setCursor(268, 269);
-  display.printf("%d%%", brightnessPercent);
+  display.setCursor(336 - brightnessLabel.length() * 18, 216);
+  display.print(brightnessLabel);
+
+  display.fillRoundRect(16, 278, 336, 82, 16, kPanel);
+  display.drawRoundRect(16, 278, 336, 82, 16,
+                        _settingsFocusIndex == 2 ? kCyan : kLine);
+  display.fillCircle(52, 319, 23, 0x0868);
+  drawMoon(display, 52, 319, kMint, 0x0868);
+  display.setFont(u8g2_font_helvB14_tf);
+  display.setTextSize(1);
+  display.setTextColor(kWhite);
+  display.setCursor(88, 325);
+  display.print("AUTO-SLEEP");
+  display.setFont();
+  const String sleepLabel = kAutoSleepLabels[_autoSleepIndex];
+  display.setTextSize(2);
+  display.setTextColor(_autoSleepIndex == 0 ? kMuted : kMint);
+  display.setCursor(336 - sleepLabel.length() * 12, 311);
+  display.print(sleepLabel);
 
   drawFooter("PWR CHANGE  BOOT BACK");
 }
