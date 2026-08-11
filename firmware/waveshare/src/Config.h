@@ -31,6 +31,7 @@ constexpr int WIFI_CONNECT_TIMEOUT_SEC = 15;
 constexpr unsigned long RECONNECT_INTERVAL_MS = 3000;
 constexpr unsigned long DISCOVERY_REFRESH_INTERVAL_MS = 5000;
 constexpr unsigned long PAIRING_RETRY_INTERVAL_MS = 2000;
+constexpr unsigned long TELEMETRY_REFRESH_INTERVAL_MS = 30000;
 
 // The Codex Remote device audio bridge uses mono PCM16LE at 24 kHz.
 constexpr int MIC_SAMPLE_RATE = 24000;

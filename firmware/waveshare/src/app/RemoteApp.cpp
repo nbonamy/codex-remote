@@ -3,6 +3,7 @@
 #include "../Config.h"
 #include "../diag/Log.h"
 #include "../hal/Board.h"
+#include <Preferences.h>
 #include <WiFi.h>
 
 namespace {
@@ -43,6 +44,11 @@ constexpr int kThreadCardY = 92;
 constexpr int kThreadCardWidth = 336;
 constexpr int kThreadCardHeight = 60;
 constexpr int kThreadCardPitch = 66;
+constexpr uint8_t kBrightnessLevels[] = {90, 165, 255};
+constexpr int kStatusPillX = 232;
+constexpr int kStatusPillY = 7;
+constexpr int kStatusPillWidth = 124;
+constexpr int kStatusPillHeight = 42;
 
 void drawCenteredText(Arduino_GFX &display, const String &text, int y,
                       uint8_t size, uint16_t color) {
@@ -81,16 +87,49 @@ void drawChevron(Arduino_GFX &display, int x, int y, uint16_t color) {
   display.drawLine(x + 6, y, x - 2, y + 8, color);
 }
 
-void drawWifiIcon(Arduino_GFX &display, int x, int y, uint16_t color) {
-  display.drawLine(x - 13, y - 1, x - 7, y - 7, color);
-  display.drawLine(x - 7, y - 7, x, y - 9, color);
-  display.drawLine(x, y - 9, x + 7, y - 7, color);
-  display.drawLine(x + 7, y - 7, x + 13, y - 1, color);
-  display.drawLine(x - 8, y + 4, x - 3, y, color);
-  display.drawLine(x - 3, y, x, y - 1, color);
-  display.drawLine(x, y - 1, x + 3, y, color);
-  display.drawLine(x + 3, y, x + 8, y + 4, color);
+int wifiStrengthLevel() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return 0;
+  }
+  const int32_t rssi = WiFi.RSSI();
+  if (rssi >= -60) return 3;
+  if (rssi >= -72) return 2;
+  return 1;
+}
+
+void drawWifiIcon(Arduino_GFX &display, int x, int y, int level,
+                  uint16_t color) {
+  if (level == 0) {
+    display.drawLine(x - 6, y - 6, x + 6, y + 6, color);
+    display.drawLine(x + 6, y - 6, x - 6, y + 6, color);
+    return;
+  }
   display.fillCircle(x, y + 8, 2, color);
+  if (level >= 2) {
+    display.drawLine(x - 8, y + 4, x - 3, y, color);
+    display.drawLine(x - 3, y, x, y - 1, color);
+    display.drawLine(x, y - 1, x + 3, y, color);
+    display.drawLine(x + 3, y, x + 8, y + 4, color);
+  }
+  if (level >= 3) {
+    display.drawLine(x - 13, y - 1, x - 7, y - 7, color);
+    display.drawLine(x - 7, y - 7, x, y - 9, color);
+    display.drawLine(x, y - 9, x + 7, y - 7, color);
+    display.drawLine(x + 7, y - 7, x + 13, y - 1, color);
+  }
+}
+
+void drawSettingsGear(Arduino_GFX &display, int x, int y, uint16_t color) {
+  display.drawCircle(x, y, 6, color);
+  display.fillCircle(x, y, 2, color);
+  display.drawFastVLine(x, y - 10, 4, color);
+  display.drawFastVLine(x, y + 7, 4, color);
+  display.drawFastHLine(x - 10, y, 4, color);
+  display.drawFastHLine(x + 7, y, 4, color);
+  display.drawLine(x - 7, y - 7, x - 5, y - 5, color);
+  display.drawLine(x + 5, y + 5, x + 7, y + 7, color);
+  display.drawLine(x + 5, y - 5, x + 7, y - 7, color);
+  display.drawLine(x - 7, y + 7, x - 5, y + 5, color);
 }
 
 void drawBatteryIcon(Arduino_GFX &display, int x, int y) {
@@ -194,6 +233,7 @@ bool RemoteApp::begin() {
     return false;
   }
   _client.begin(this);
+  loadSettings();
   _dirty = true;
   return true;
 }
@@ -214,6 +254,11 @@ void RemoteApp::update() {
       _playbackActive = false;
       _dirty = true;
     }
+  }
+  if (millis() - _lastTelemetryRefreshMs >=
+      TELEMETRY_REFRESH_INTERVAL_MS) {
+    _lastTelemetryRefreshMs = millis();
+    _dirty = true;
   }
   if (_dirty) {
     draw();
@@ -295,11 +340,17 @@ void RemoteApp::handleButtons() {
     } else if (powerPressed && !_awaitingResponse) {
       startRecording();
     }
-  } else {
+  } else if (_view == View::Agents) {
     if (bootPressed) {
       backFromAgents();
     } else if (powerPressed) {
       confirmAgent();
+    }
+  } else {
+    if (bootPressed) {
+      closeSettings();
+    } else if (powerPressed) {
+      activateSettingsFocus();
     }
   }
 
@@ -341,6 +392,26 @@ void RemoteApp::handleTouch() {
 }
 
 void RemoteApp::handleTap(int x, int y) {
+  if (!_recording && x >= kStatusPillX &&
+      x < kStatusPillX + kStatusPillWidth && y >= kStatusPillY &&
+      y < kStatusPillY + kStatusPillHeight) {
+    if (_view == View::Settings) {
+      closeSettings();
+    } else {
+      showSettings();
+    }
+    return;
+  }
+  if (_view == View::Settings) {
+    if (y >= 105 && y < 210) {
+      _settingsFocusIndex = 0;
+      toggleAutoRead();
+    } else if (y >= 226 && y < 331) {
+      _settingsFocusIndex = 1;
+      cycleDisplayBrightness();
+    }
+    return;
+  }
   if (_view == View::Threads) {
     if (!_client.connected()) {
       if (y >= 250) {
@@ -394,6 +465,11 @@ void RemoteApp::handleTap(int x, int y) {
 }
 
 void RemoteApp::pageForward() {
+  if (_view == View::Settings) {
+    _settingsFocusIndex = 1;
+    _dirty = true;
+    return;
+  }
   if (_view == View::Threads) {
     const int lastThreadOffset =
         max(0, _client.threadCount() - kThreadsPerPage);
@@ -433,6 +509,11 @@ void RemoteApp::pageForward() {
 }
 
 void RemoteApp::pageBack() {
+  if (_view == View::Settings) {
+    _settingsFocusIndex = 0;
+    _dirty = true;
+    return;
+  }
   if (_view == View::Threads) {
     const int lastThreadOffset =
         max(0, _client.threadCount() - kThreadsPerPage);
@@ -558,6 +639,73 @@ void RemoteApp::confirmAgent() {
   _client.selectAgent(_agentFocusIndex);
 }
 
+void RemoteApp::showSettings() {
+  _settingsReturnView = _view;
+  _settingsFocusIndex = 0;
+  _view = View::Settings;
+  _dirty = true;
+}
+
+void RemoteApp::closeSettings() {
+  _view = _settingsReturnView;
+  updateReaderSelection();
+  _dirty = true;
+}
+
+void RemoteApp::toggleAutoRead() {
+  _autoReadReplies = !_autoReadReplies;
+  persistSettings();
+  _dirty = true;
+}
+
+void RemoteApp::activateSettingsFocus() {
+  if (_settingsFocusIndex == 1) {
+    cycleDisplayBrightness();
+  } else {
+    toggleAutoRead();
+  }
+}
+
+void RemoteApp::cycleDisplayBrightness() {
+  int currentIndex = 0;
+  for (int index = 0; index < 3; index++) {
+    if (_displayBrightness == kBrightnessLevels[index]) {
+      currentIndex = index;
+      break;
+    }
+  }
+  _displayBrightness = kBrightnessLevels[(currentIndex + 1) % 3];
+  Board::setDisplayBrightness(_displayBrightness);
+  persistSettings();
+  _dirty = true;
+}
+
+void RemoteApp::loadSettings() {
+  Preferences preferences;
+  if (preferences.begin("codexremote", true)) {
+    _autoReadReplies = preferences.getBool("auto_read", false);
+    const uint8_t savedBrightness =
+        preferences.getUChar("brightness", DEFAULT_BRIGHTNESS);
+    for (const uint8_t level : kBrightnessLevels) {
+      if (savedBrightness == level) {
+        _displayBrightness = level;
+        break;
+      }
+    }
+    preferences.end();
+  }
+  Board::setDisplayBrightness(_displayBrightness);
+}
+
+void RemoteApp::persistSettings() {
+  Preferences preferences;
+  if (preferences.begin("codexremote", false)) {
+    preferences.putBool("auto_read", _autoReadReplies);
+    preferences.putUChar("brightness", _displayBrightness);
+    preferences.end();
+  }
+}
+
 void RemoteApp::startRecording() {
   if (!_client.connected() || _client.activeThreadId().isEmpty()) {
     return;
@@ -635,6 +783,10 @@ void RemoteApp::updateReaderSelection() {
         _readerMessageId = message.id;
         _readerPage = 0;
         _awaitingResponse = false;
+        if (_autoReadReplies && !_client.activeThreadId().isEmpty()) {
+          _ignoreRemoteAudio = false;
+          _client.speakMessage(_client.activeThreadId(), message.id);
+        }
         return;
       }
     }
@@ -685,8 +837,10 @@ void RemoteApp::draw() {
     drawThreads();
   } else if (_view == View::Conversation) {
     drawConversation();
-  } else {
+  } else if (_view == View::Agents) {
     drawAgents();
+  } else {
+    drawSettings();
   }
   Board::flushDisplay();
   _lastDrawMs = millis();
@@ -740,20 +894,31 @@ void RemoteApp::handleSerialDebug() {
 
 void RemoteApp::drawHeader() {
   Arduino_GFX &display = Board::display();
-  display.setTextSize(3);
+  display.setFont(u8g2_font_helvB18_tf);
+  display.setTextSize(1);
   display.setTextColor(kWhite);
-  display.setCursor(16, 18);
+  display.setCursor(16, 35);
   String headerName = "Codex Remote";
-  if (_view == View::Agents) {
+  if (_view == View::Settings) {
+    headerName = "Settings";
+  } else if (_view == View::Agents) {
     headerName = _client.agentCount() > 0 ? "Choose agent" : "Pair host";
   } else if (_view == View::Conversation &&
              !_client.selectedAgentName().isEmpty()) {
     headerName = _client.selectedAgentName();
   }
-  display.print(headerName.substring(0, 15));
-  const bool wifiConnected = WiFi.status() == WL_CONNECTED;
-  drawWifiIcon(display, 288, 27, wifiConnected ? kCyan : kCoral);
-  drawBatteryIcon(display, 326, 20);
+  display.print(fitTextToWidth(display, headerName, 220));
+  display.setFont();
+  const int wifiLevel = wifiStrengthLevel();
+  display.fillRoundRect(kStatusPillX, kStatusPillY, kStatusPillWidth,
+                        kStatusPillHeight, 13, kPanel);
+  display.drawRoundRect(kStatusPillX, kStatusPillY, kStatusPillWidth,
+                        kStatusPillHeight, 13,
+                        _view == View::Settings ? kCyan : kLine);
+  drawSettingsGear(display, 252, 28, kCyan);
+  drawWifiIcon(display, 290, 28, wifiLevel,
+               wifiLevel > 0 ? kCyan : kCoral);
+  drawBatteryIcon(display, 317, 21);
 }
 
 void RemoteApp::drawThreads() {
@@ -940,6 +1105,60 @@ void RemoteApp::drawAgents() {
     drawChevron(display, 332, y + 29, kMint);
   }
   drawFooter("PWR SELECT  BOOT BACK");
+}
+
+void RemoteApp::drawSettings() {
+  Arduino_GFX &display = Board::display();
+  display.setTextSize(2);
+  display.setTextColor(kMuted);
+  display.setCursor(18, 75);
+  display.print("QUICK SETTINGS");
+
+  display.fillRoundRect(16, 105, 336, 105, 18, kPanel);
+  display.drawRoundRect(16, 105, 336, 105, 18,
+                        _settingsFocusIndex == 0 ? kCyan : kLine);
+  display.fillCircle(52, 157, 25, 0x0868);
+  drawSpark(display, 52, 157, 11, kMint);
+
+  display.setFont(u8g2_font_helvB18_tf);
+  display.setTextSize(1);
+  display.setTextColor(kWhite);
+  display.setCursor(88, 147);
+  display.print("AUTO-READ");
+  display.setFont();
+  display.setTextSize(2);
+  display.setTextColor(kMuted);
+  display.setCursor(88, 176);
+  display.print("NEW REPLIES");
+
+  const uint16_t toggleColor = _autoReadReplies ? kMint : kLine;
+  display.fillRoundRect(268, 138, 67, 38, 19, toggleColor);
+  display.fillCircle(_autoReadReplies ? 316 : 287, 157, 14,
+                     _autoReadReplies ? kPanel : kMuted);
+
+  display.fillRoundRect(16, 226, 336, 105, 18, kPanel);
+  display.drawRoundRect(16, 226, 336, 105, 18,
+                        _settingsFocusIndex == 1 ? kCyan : kLine);
+  display.fillCircle(52, 278, 25, 0x0868);
+  drawSettingsGear(display, 52, 278, kMint);
+  display.setFont(u8g2_font_helvB18_tf);
+  display.setTextSize(1);
+  display.setTextColor(kWhite);
+  display.setCursor(88, 268);
+  display.print("BRIGHTNESS");
+  display.setFont();
+  display.setTextSize(2);
+  display.setTextColor(kMuted);
+  display.setCursor(88, 297);
+  display.print("DISPLAY");
+  const int brightnessPercent =
+      (static_cast<int>(_displayBrightness) * 100 + 127) / 255;
+  display.setTextSize(3);
+  display.setTextColor(kMint);
+  display.setCursor(268, 269);
+  display.printf("%d%%", brightnessPercent);
+
+  drawFooter("PWR CHANGE  BOOT BACK");
 }
 
 void RemoteApp::drawConversation() {
