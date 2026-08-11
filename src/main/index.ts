@@ -11,10 +11,13 @@ import {
   type NativeImage,
 } from 'electron';
 import {
+  CodexAppServerUnixSocketTransport,
   CodexSurface,
   transcribeWithAppleSpeechAnalyzer,
 } from 'codex-app-sdk/node';
+import { CodexAppServerClient } from 'codex-app-sdk/codex';
 import simulatorHtml from '../server/simulator.html?raw';
+import { readDeviceRecentMessages } from '../server/device-history';
 import { PairingStore } from '../server/pairing-store';
 import {
   CodexRemoteServer,
@@ -35,6 +38,7 @@ const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAA
 
 type HostRuntime = {
   profile: CodexRemoteHostProfile;
+  client: CodexAppServerClient;
   surface: CodexSurface;
 };
 
@@ -147,18 +151,22 @@ async function startServices(): Promise<void> {
   refreshPairingState();
 
   hostRuntimes = profiles.map((profile) => {
+    const client = new CodexAppServerClient(
+      new CodexAppServerUnixSocketTransport({
+        type: 'unixSocket',
+        socketPath: profile.appServerSocketPath,
+      }),
+    );
     const surface = new CodexSurface({
+      client,
       codexHome: profile.codexHome,
       cwd: defaultCwd,
       autoSelectFirstConversation: false,
+      loadingStrategy: 'lazy',
       clientInfo: {
         name: profile.id === 'codex' ? 'codex_remote' : 'codex_remote_ade',
         title: `Codex Remote · ${profile.name}`,
         version: app.getVersion(),
-      },
-      transport: {
-        type: 'unixSocket',
-        socketPath: profile.appServerSocketPath,
       },
     });
     surface.onStateChange((snapshot) => {
@@ -170,7 +178,7 @@ async function startServices(): Promise<void> {
         error: snapshot.status === 'error' ? snapshot.error : null,
       });
     });
-    return { profile, surface };
+    return { profile, client, surface };
   });
 
   await Promise.all(hostRuntimes.map(async ({ profile, surface }) => {
@@ -185,7 +193,7 @@ async function startServices(): Promise<void> {
     }
   }));
 
-  const remoteHosts: RemoteCodexHost[] = hostRuntimes.map(({ profile, surface }) => ({
+  const remoteHosts: RemoteCodexHost[] = hostRuntimes.map(({ profile, client, surface }) => ({
     id: profile.id,
     name: profile.name,
     surface,
@@ -193,6 +201,7 @@ async function startServices(): Promise<void> {
       surface.getSnapshot().authentication.account?.type === 'apiKey'
       || Boolean(process.env.OPENAI_API_KEY?.trim())
     ),
+    readRecentMessages: (threadId) => readDeviceRecentMessages(client, threadId),
   }));
   server = new CodexRemoteServer({
     hosts: remoteHosts,

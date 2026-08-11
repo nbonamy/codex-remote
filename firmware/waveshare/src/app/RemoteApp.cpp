@@ -21,8 +21,8 @@ constexpr uint16_t kMagenta = 0xF81F;
 constexpr uint16_t kCoral = 0xFB6D;
 constexpr uint16_t kYellow = 0xFE88;
 constexpr uint16_t kGreen = 0x07E8;
-constexpr int kThreadsPerPage = 5;
-constexpr int kThreadScrollStep = kThreadsPerPage - 1;
+constexpr int kThreadsPerPage = 4;
+constexpr int kThreadScrollStep = kThreadsPerPage;
 constexpr int kBridgesPerPage = 4;
 constexpr int kMessageCharactersPerLine = 18;
 constexpr int kMessageLinesPerPage = 6;
@@ -35,14 +35,14 @@ constexpr int kMessageHeaderBaselineY = 172;
 constexpr int kMessageTextBaselineY = 213;
 constexpr int kSwipeThresholdPx = 48;
 constexpr int kNewThreadCardX = 16;
-constexpr int kNewThreadCardY = 374;
+constexpr int kNewThreadCardY = 368;
 constexpr int kNewThreadCardWidth = 336;
-constexpr int kNewThreadCardHeight = 60;
+constexpr int kNewThreadCardHeight = 70;
 constexpr int kThreadCardX = 16;
 constexpr int kThreadCardY = 92;
 constexpr int kThreadCardWidth = 336;
-constexpr int kThreadCardHeight = 48;
-constexpr int kThreadCardPitch = 54;
+constexpr int kThreadCardHeight = 60;
+constexpr int kThreadCardPitch = 66;
 
 void drawCenteredText(Arduino_GFX &display, const String &text, int y,
                       uint8_t size, uint16_t color) {
@@ -784,14 +784,17 @@ void RemoteApp::drawThreads() {
   display.drawRoundRect(kNewThreadCardX + 2, kNewThreadCardY + 2,
                         kNewThreadCardWidth - 4, kNewThreadCardHeight - 4, 16,
                         kPanelGlow);
-  display.fillCircle(46, newThreadCenterY, 19, 0x0868);
+  display.fillCircle(46, newThreadCenterY, 21, 0x0868);
   drawMicrophone(display, 46, newThreadCenterY - 3, kWhite);
-  display.setTextSize(2);
+  display.setFont(u8g2_font_helvB18_tf);
+  display.setTextSize(1);
   display.setTextColor(kWhite);
-  display.setCursor(78, kNewThreadCardY + 10);
+  display.setCursor(78, kNewThreadCardY + 30);
   display.print("NEW THREAD");
+  display.setFont();
+  display.setTextSize(2);
   display.setTextColor(kMint);
-  display.setCursor(78, kNewThreadCardY + 36);
+  display.setCursor(78, kNewThreadCardY + 43);
   display.print("PRESS PWR");
   drawChevron(display, 334, newThreadCenterY, kMint);
 
@@ -818,15 +821,16 @@ void RemoteApp::drawThreads() {
                           kThreadCardHeight, 10, kPanel);
     display.drawRoundRect(kThreadCardX, y, kThreadCardWidth,
                           kThreadCardHeight, 10, kLine);
-    display.fillCircle(36, y + 24, 13, 0x180B);
-    drawSpark(display, 36, y + 24, 7, kViolet);
-    display.setFont(u8g2_font_helvB18_tf);
+    const int centerY = y + kThreadCardHeight / 2;
+    display.fillCircle(39, centerY, 16, 0x180B);
+    drawSpark(display, 39, centerY, 8, kViolet);
+    display.setFont(u8g2_font_helvB24_tf);
     display.setTextSize(1);
     display.setTextColor(kWhite);
-    display.setCursor(58, y + 34);
-    display.print(fitTextToWidth(display, _client.thread(index).title, 260));
+    display.setCursor(65, y + 46);
+    display.print(fitTextToWidth(display, _client.thread(index).title, 247));
     display.setFont();
-    drawChevron(display, 336, y + 24, kMint);
+    drawChevron(display, 336, centerY, kMint);
   }
 }
 

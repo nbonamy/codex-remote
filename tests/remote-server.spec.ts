@@ -461,6 +461,56 @@ describe('CodexRemoteServer realtime voice', () => {
 });
 
 describe('CodexRemoteServer thread history', () => {
+  it('uses a five-turn summary provider without resuming the conversation', async () => {
+    const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
+    const surface = fakeSurface(conversation);
+    const readRecentMessages = vi.fn(async () => ([
+      {
+        id: 'message-user',
+        role: 'user' as const,
+        status: 'complete' as const,
+        parts: [{ type: 'text' as const, text: 'Recent question' }],
+      },
+      {
+        id: 'message-assistant',
+        role: 'assistant' as const,
+        status: 'complete' as const,
+        parts: [{ type: 'text' as const, text: 'Recent answer' }],
+      },
+    ]));
+    const server = new CodexRemoteServer({
+      hosts: [{
+        id: 'codex',
+        name: 'Codex',
+        surface,
+        readRecentMessages,
+      }],
+      token: 'test-device-token',
+      defaultCwd: '/tmp/project',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+    });
+    servers.push(server);
+    const info = await server.start();
+
+    const response = await fetch(
+      `http://127.0.0.1:${info.port}/api/v1/hosts/codex/threads/thread-1/messages`,
+      { headers: { 'X-Codex-Remote-Token': 'test-device-token' } },
+    );
+    const body = await response.json() as {
+      thread: { messages: Array<{ role: string; text: string }> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.thread.messages).toEqual([
+      expect.objectContaining({ role: 'user', text: 'Recent question' }),
+      expect.objectContaining({ role: 'assistant', text: 'Recent answer' }),
+    ]);
+    expect(readRecentMessages).toHaveBeenCalledWith('thread-1');
+    expect(conversation.load).not.toHaveBeenCalled();
+  });
+
   it('reads a selected assistant reply aloud without trusting device-supplied text', async () => {
     const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
     const loadedSnapshot = conversationSnapshot();

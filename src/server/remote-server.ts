@@ -14,6 +14,7 @@ import type {
 import type {
   CodexRealtimeEvent,
   CodexSurfaceSnapshot,
+  SurfaceMessage,
 } from 'codex-app-sdk/surface';
 import {
   WebSocket,
@@ -53,6 +54,7 @@ export type RemoteCodexHost = {
   name: string;
   surface: CodexSurface;
   realtimeVoiceAvailable?: () => boolean;
+  readRecentMessages?: (threadId: string) => Promise<SurfaceMessage[]>;
 };
 
 export type RemoteServerOptions = {
@@ -944,8 +946,9 @@ export class CodexRemoteServer {
   ): Promise<{
     thread: ReturnType<typeof toDeviceThreadState>;
   }> {
-    const conversation = host.surface.conversation(threadId);
-    const snapshot = await loadConversationSnapshot(conversation);
+    const snapshot = host.readRecentMessages
+      ? recentThreadSnapshot(host, threadId, await host.readRecentMessages(threadId))
+      : await loadConversationSnapshot(host.surface.conversation(threadId));
     return {
       thread: toDeviceThreadState(snapshot, threadId),
     };
@@ -1035,6 +1038,21 @@ export class CodexRemoteServer {
     );
     return host ? { host, path: match[2]! } : null;
   }
+}
+
+function recentThreadSnapshot(
+  host: RemoteCodexHost,
+  threadId: string,
+  messages: SurfaceMessage[],
+): CodexSurfaceSnapshot {
+  const snapshot = host.surface.getSnapshot();
+  const summary = snapshot.conversations.find((conversation) => conversation.id === threadId);
+  return {
+    ...snapshot,
+    messages,
+    busy: summary?.status === 'active',
+    error: null,
+  };
 }
 
 function decodedPathSegment(value: string): string | null {
