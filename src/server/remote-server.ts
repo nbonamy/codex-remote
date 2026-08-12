@@ -55,7 +55,16 @@ export type RemoteCodexAgent = {
   surface: CodexSurface;
   realtimeVoiceAvailable?: () => boolean;
   readRecentMessages?: (threadId: string) => Promise<SurfaceMessage[]>;
+  releaseThread?: (threadId: string) => Promise<void>;
 };
+
+const DEVICE_CONVERSATION_OPTIONS = {
+  approvalMode: 'never',
+  permissionMode: 'workspace-write',
+  model: 'gpt-5.6-luna',
+  reasoningEffort: 'medium',
+  serviceTier: 'priority',
+} as const;
 
 export type RemoteServerOptions = {
   agents?: RemoteCodexAgent[];
@@ -267,8 +276,10 @@ export class CodexRemoteServer {
     for (const unsubscribe of this.unsubscribeAgentListeners.splice(0)) unsubscribe();
     for (const timer of this.conversationBroadcastTimers.values()) clearTimeout(timer);
     this.conversationBroadcastTimers.clear();
+    for (const session of this.sessions) session.closed = true;
     await Promise.all([...this.sessions].map(async (session) => {
-      await this.releaseRealtime(session);
+      this.cancelSpeech(session);
+      await this.releaseActiveThread(session);
       session.socket.close(1001, 'Server shutting down');
     }));
     this.sessions.clear();
@@ -430,10 +441,9 @@ export class CodexRemoteServer {
 
       if (request.method === 'POST' && path === '/threads') {
         const body = await readJsonBody(request);
-        const snapshot = await agent.surface.createConversation({
-          approvalMode: 'never',
-          permissionMode: 'workspace-write',
-        });
+        const snapshot = await agent.surface.createConversation(
+          DEVICE_CONVERSATION_OPTIONS,
+        );
         const threadId = snapshot.activeConversationId;
         if (!threadId) throw new Error('Codex did not return a new thread id');
         const prompt = recordString(body, 'text', false);
@@ -579,7 +589,7 @@ export class CodexRemoteServer {
         ? 'available'
         : 'unavailable',
     });
-    this.sendThreads(session);
+    void this.sendThreads(session, true).catch((error) => this.sendError(session, error));
 
     socket.on('message', (data, isBinary) => {
       if (isAudioStartControl(data, isBinary)) {
@@ -596,7 +606,9 @@ export class CodexRemoteServer {
       session.closed = true;
       this.cancelSpeech(session);
       this.sessions.delete(session);
-      void session.pending.then(() => this.releaseRealtime(session));
+      void session.pending
+        .then(() => this.releaseActiveThread(session))
+        .catch((error) => console.warn('Failed to release device thread', error));
     };
     socket.on('close', detach);
     socket.on('error', detach);
@@ -616,16 +628,19 @@ export class CodexRemoteServer {
       switch (command.type) {
         case 'hello':
         case 'list_threads':
-          this.sendThreads(session);
+          await this.sendThreads(session, true);
+          return;
+        case 'close_thread':
+          await this.releaseActiveThread(session);
+          await this.sendThreads(session, true);
           return;
         case 'create_thread': {
-          const snapshot = await session.agent.surface.createConversation({
-            approvalMode: 'never',
-            permissionMode: 'workspace-write',
-          });
+          await this.releaseActiveThread(session);
+          const snapshot = await session.agent.surface.createConversation(
+            DEVICE_CONVERSATION_OPTIONS,
+          );
           const threadId = snapshot.activeConversationId;
           if (!threadId) throw new Error('Codex did not return a new thread id');
-          if (session.threadId !== threadId) await this.releaseRealtime(session);
           session.threadId = threadId;
           this.send(session, {
             type: 'thread',
@@ -635,7 +650,9 @@ export class CodexRemoteServer {
           return;
         }
         case 'open_thread':
-          if (session.threadId !== command.threadId) await this.releaseRealtime(session);
+          if (session.threadId !== command.threadId) {
+            await this.releaseActiveThread(session);
+          }
           session.threadId = command.threadId;
           await this.sendThread(session, command.threadId);
           return;
@@ -1060,6 +1077,26 @@ export class CodexRemoteServer {
     }
   }
 
+  private async releaseActiveThread(session: DeviceSession): Promise<void> {
+    const threadId = session.threadId;
+    session.threadId = null;
+    this.cancelSpeech(session);
+    await this.releaseRealtime(session);
+    if (!threadId) return;
+    const usedByAnotherSession = [...this.sessions].some((candidate) => (
+      candidate !== session
+      && !candidate.closed
+      && candidate.agent.id === session.agent.id
+      && candidate.threadId === threadId
+    ));
+    if (usedByAnotherSession) return;
+    if (session.agent.releaseThread) {
+      await session.agent.releaseThread(threadId);
+      return;
+    }
+    session.agent.surface.forgetConversation(threadId);
+  }
+
   private async sendPrompt(
     agent: RemoteCodexAgent,
     threadId: string,
@@ -1099,17 +1136,21 @@ export class CodexRemoteServer {
     };
   }
 
-  private sendThreads(session: DeviceSession): void {
-    const snapshot = session.agent.surface.getSnapshot();
+  private async sendThreads(session: DeviceSession, refresh = false): Promise<void> {
+    const conversations = refresh
+      ? await session.agent.surface.listConversations({ limit: 30 })
+      : session.agent.surface.getSnapshot().conversations;
     this.send(session, {
       type: 'threads',
-      threads: toDeviceThreads(snapshot.conversations),
+      threads: toDeviceThreads(conversations),
     });
   }
 
   private broadcastThreads(agentId: string): void {
     for (const session of this.sessions) {
-      if (session.agent.id === agentId) this.sendThreads(session);
+      if (session.agent.id === agentId) {
+        void this.sendThreads(session).catch((error) => this.sendError(session, error));
+      }
     }
   }
 

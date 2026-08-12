@@ -497,7 +497,7 @@ describe('CodexRemoteServer thread history', () => {
     });
   });
 
-  it('creates device threads without a cwd or interactive approvals', async () => {
+  it('creates device threads with efficient defaults and no cwd', async () => {
     const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
     const surface = fakeSurface(conversation);
     const readRecentMessages = vi.fn(async () => {
@@ -531,8 +531,54 @@ describe('CodexRemoteServer thread history', () => {
     expect(surface.createConversation).toHaveBeenCalledWith({
       approvalMode: 'never',
       permissionMode: 'workspace-write',
+      model: 'gpt-5.6-luna',
+      reasoningEffort: 'medium',
+      serviceTier: 'priority',
     });
     expect(readRecentMessages).not.toHaveBeenCalled();
+  });
+
+  it('releases the active thread and refreshes titles when returning to the list', async () => {
+    const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
+    const surface = fakeSurface(conversation);
+    const releaseThread = vi.fn(async () => undefined);
+    vi.mocked(surface.listConversations)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 'thread-1',
+        title: 'Updated by app-server',
+        preview: '',
+        status: 'idle',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        cwd: '',
+        turnCount: 1,
+      }]);
+    const server = new CodexRemoteServer({
+      agents: [{ id: 'codex', name: 'Codex', surface, releaseThread }],
+      token: 'test-device-token',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+    });
+    servers.push(server);
+    const info = await server.start();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/agents/codex/device?token=test-device-token`,
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+
+    await messages.nextJson('hello');
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({ type: 'open_thread', threadId: 'thread-1' }));
+    await messages.nextJson('thread');
+    socket.send(JSON.stringify({ type: 'close_thread' }));
+
+    await expect(messages.nextJson('threads')).resolves.toMatchObject({
+      threads: [{ id: 'thread-1', title: 'Updated by app-server' }],
+    });
+    expect(releaseThread).toHaveBeenCalledWith('thread-1');
   });
 
   it('denies approvals because the device cannot answer them', async () => {
@@ -1075,6 +1121,7 @@ function fakeSurface(conversation: CodexConversation): CodexSurface {
     listConversations: vi.fn(async () => []),
     createConversation: vi.fn(async () => snapshot),
     conversation: vi.fn(() => conversation),
+    forgetConversation: vi.fn(),
   } as unknown as CodexSurface;
 }
 

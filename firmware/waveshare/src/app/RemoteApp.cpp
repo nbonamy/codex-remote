@@ -658,7 +658,9 @@ void RemoteApp::backToThreads() {
   _ignoreRemoteAudio = true;
   _view = View::Threads;
   _awaitingResponse = false;
-  _client.listThreads();
+  if (!_client.closeThread()) {
+    _client.listThreads();
+  }
   _dirty = true;
 }
 

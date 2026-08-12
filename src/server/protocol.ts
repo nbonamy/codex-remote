@@ -37,6 +37,7 @@ export type DeviceThreadState = {
 export type DeviceClientCommand =
   | { type: 'hello'; device?: string }
   | { type: 'list_threads' }
+  | { type: 'close_thread' }
   | { type: 'create_thread' }
   | { type: 'open_thread'; threadId: string }
   | { type: 'send_text'; threadId?: string; text: string }
@@ -111,6 +112,7 @@ export function parseDeviceCommand(value: unknown): DeviceClientCommand {
   switch (value.type) {
     case 'hello':
     case 'list_threads':
+    case 'close_thread':
     case 'create_thread':
     case 'audio_end':
     case 'audio_cancel':

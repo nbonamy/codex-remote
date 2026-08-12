@@ -171,9 +171,7 @@ async function startServices(): Promise<void> {
         );
       },
     });
-    const client = new CodexAppServerClient(
-      transport,
-    );
+    const client = new CodexAppServerClient(transport);
     const surface = new CodexSurface({
       client,
       codexHome: profile.codexHome,
@@ -225,6 +223,16 @@ async function startServices(): Promise<void> {
       || Boolean(process.env.OPENAI_API_KEY?.trim())
     ),
     readRecentMessages: (threadId) => readDeviceRecentMessages(client, threadId),
+    releaseThread: async (threadId) => {
+      try {
+        const result = await client.request('thread/unsubscribe', { threadId });
+        console.info(`Codex thread ${threadId} unsubscribe: ${result.status}`);
+      } catch (error) {
+        console.warn(`Failed to unsubscribe Codex thread ${threadId}`, error);
+      } finally {
+        surface.forgetConversation(threadId);
+      }
+    },
   }));
   const synthesizeSpeech = createHostSpeechSynthesizer({
     platform: process.platform,

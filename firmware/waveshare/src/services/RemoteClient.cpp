@@ -677,6 +677,13 @@ bool RemoteClient::openThread(const String &threadId) {
   return sendControl(document);
 }
 
+bool RemoteClient::closeThread() {
+  JsonDocument document;
+  document["type"] = "close_thread";
+  clearActiveThread();
+  return sendControl(document);
+}
+
 bool RemoteClient::listThreads() {
   JsonDocument document;
   document["type"] = "list_threads";

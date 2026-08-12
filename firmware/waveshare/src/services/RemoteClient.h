@@ -80,6 +80,7 @@ public:
 
   bool createThread();
   bool openThread(const String &threadId);
+  bool closeThread();
   bool listThreads();
   bool startAudio(const String &threadId);
   bool sendAudio(const uint8_t *data, size_t length);
