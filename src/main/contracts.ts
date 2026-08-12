@@ -27,7 +27,6 @@ export type CodexRemoteDesktopState = {
   }>;
   server: {
     port: number;
-    defaultCwd: string;
     localUrl: string;
     networkUrls: string[];
     simulatorUrl: string;

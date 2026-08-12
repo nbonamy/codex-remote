@@ -9,6 +9,7 @@ import type {
 import type {
   CodexRealtimeEvent,
   CodexSurfaceSnapshot,
+  SurfaceMessage,
 } from 'codex-app-sdk/surface';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
@@ -48,7 +49,6 @@ describe('CodexRemoteServer device pairing', () => {
         { id: 'codex-ade', name: 'Codex ADE', surface: adeSurface },
       ],
       token: 'server-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
@@ -97,7 +97,6 @@ describe('CodexRemoteServer device pairing', () => {
     const server = new CodexRemoteServer({
       surface: fakeSurface(fakeConversation(new FakeRealtimeSession('thread-1'))),
       token: 'server-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
@@ -193,7 +192,6 @@ describe('CodexRemoteServer realtime voice', () => {
     const server = new CodexRemoteServer({
       surface: fakeSurface(conversation),
       token: 'test-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
@@ -231,7 +229,6 @@ describe('CodexRemoteServer realtime voice', () => {
     const server = new CodexRemoteServer({
       surface: fakeSurface(conversation),
       token: 'test-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html><title>sim</title>',
       port: 0,
       advertise: false,
@@ -299,7 +296,6 @@ describe('CodexRemoteServer realtime voice', () => {
     const server = new CodexRemoteServer({
       surface,
       token: 'test-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html><title>sim</title>',
       port: 0,
       advertise: false,
@@ -359,7 +355,6 @@ describe('CodexRemoteServer realtime voice', () => {
     const server = new CodexRemoteServer({
       surface: fakeSurface(fakeConversation(realtime)),
       token: 'correct-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
@@ -386,7 +381,6 @@ describe('CodexRemoteServer realtime voice', () => {
     const server = new CodexRemoteServer({
       surface: fakeSurface(conversation),
       token: 'test-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
@@ -431,7 +425,6 @@ describe('CodexRemoteServer realtime voice', () => {
     const server = new CodexRemoteServer({
       surface: fakeSurface(conversation),
       token: 'test-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
@@ -470,6 +463,175 @@ describe('CodexRemoteServer realtime voice', () => {
 });
 
 describe('CodexRemoteServer thread history', () => {
+  it('projects an unmaterialized empty thread without surfacing an error', async () => {
+    const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
+    const surface = fakeSurface(conversation);
+    const readRecentMessages = vi.fn(async () => {
+      throw new Error(
+        'thread thread-1 is not materialized yet; thread/turns/list is unavailable before first user message',
+      );
+    });
+    const server = new CodexRemoteServer({
+      agents: [{ id: 'codex', name: 'Codex', surface, readRecentMessages }],
+      token: 'test-device-token',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+    });
+    servers.push(server);
+    const info = await server.start();
+
+    const response = await fetch(
+      `http://127.0.0.1:${info.port}/api/v1/agents/codex/threads/thread-1/messages`,
+      { headers: { 'X-Codex-Remote-Token': 'test-device-token' } },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      thread: {
+        id: 'thread-1',
+        busy: false,
+        error: null,
+        messages: [],
+      },
+    });
+  });
+
+  it('creates device threads without a cwd or interactive approvals', async () => {
+    const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
+    const surface = fakeSurface(conversation);
+    const readRecentMessages = vi.fn(async () => {
+      throw new Error('thread is not materialized yet');
+    });
+    const server = new CodexRemoteServer({
+      agents: [{
+        id: 'codex',
+        name: 'Codex',
+        surface,
+        readRecentMessages,
+      }],
+      token: 'test-device-token',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+    });
+    servers.push(server);
+    const info = await server.start();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/agents/codex/device?token=test-device-token`,
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+
+    await messages.nextJson('hello');
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({ type: 'create_thread' }));
+    await messages.nextJson('thread');
+
+    expect(surface.createConversation).toHaveBeenCalledWith({
+      approvalMode: 'never',
+      permissionMode: 'workspace-write',
+    });
+    expect(readRecentMessages).not.toHaveBeenCalled();
+  });
+
+  it('denies approvals because the device cannot answer them', async () => {
+    const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
+    const surface = fakeSurface(conversation);
+    const server = new CodexRemoteServer({
+      surface,
+      token: 'test-device-token',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+    });
+    servers.push(server);
+
+    const listener = vi.mocked(surface.onEvent).mock.calls[0]?.[0];
+    listener?.({
+      type: 'approval.requested',
+      conversationId: 'thread-1',
+      payload: {
+        approval: {
+          id: 'approval-1',
+          kind: 'command',
+          conversationId: 'thread-1',
+          title: 'Run command',
+        },
+      },
+    } as never);
+
+    await vi.waitFor(() => {
+      expect(conversation.resolveApproval).toHaveBeenCalledWith(
+        'approval-1',
+        'deny',
+        'once',
+      );
+    });
+  });
+
+  it('uses the five-turn summary provider for live conversation updates', async () => {
+    const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
+    const surface = fakeSurface(conversation);
+    let recentMessages: SurfaceMessage[] = [{
+      id: 'message-user',
+      role: 'user' as const,
+      status: 'complete' as const,
+      parts: [{ type: 'text' as const, text: 'Recent question' }],
+    }];
+    const readRecentMessages = vi.fn(async () => recentMessages);
+    const server = new CodexRemoteServer({
+      agents: [{
+        id: 'codex',
+        name: 'Codex',
+        surface,
+        readRecentMessages,
+      }],
+      token: 'test-device-token',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+    });
+    servers.push(server);
+    const info = await server.start();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/agents/codex/device?token=test-device-token`,
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+
+    await messages.nextJson('hello');
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({ type: 'open_thread', threadId: 'thread-1' }));
+    await messages.nextJson('thread');
+
+    recentMessages = [
+      recentMessages[0]!,
+      {
+        id: 'message-assistant',
+        role: 'assistant',
+        status: 'complete',
+        parts: [{ type: 'text', text: 'The new answer' }],
+      },
+    ];
+    const listener = vi.mocked(surface.onEvent).mock.calls[0]?.[0];
+    listener?.({
+      type: 'message.updated',
+      conversationId: 'thread-1',
+      payload: {},
+    } as never);
+
+    await expect(messages.nextJson('thread')).resolves.toMatchObject({
+      thread: {
+        messages: [
+          { role: 'user', text: 'Recent question' },
+          { role: 'assistant', text: 'The new answer' },
+        ],
+      },
+    });
+    expect(conversation.load).not.toHaveBeenCalled();
+  });
+
   it('uses a five-turn summary provider without resuming the conversation', async () => {
     const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
     const surface = fakeSurface(conversation);
@@ -495,7 +657,6 @@ describe('CodexRemoteServer thread history', () => {
         readRecentMessages,
       }],
       token: 'test-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
@@ -542,7 +703,6 @@ describe('CodexRemoteServer thread history', () => {
     const server = new CodexRemoteServer({
       surface: fakeSurface(conversation),
       token: 'test-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
@@ -568,7 +728,10 @@ describe('CodexRemoteServer thread history', () => {
 
     await expect(messages.nextJson('status')).resolves.toMatchObject({ status: 'speaking' });
     await expect(messages.nextBinary()).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
-    expect(synthesizeSpeech).toHaveBeenCalledWith('This is the stored assistant reply.');
+    expect(synthesizeSpeech).toHaveBeenCalledWith(
+      'This is the stored assistant reply.',
+      expect.any(AbortSignal),
+    );
   });
 
   it('streams synthesized PCM while preserving complete 16-bit samples', async () => {
@@ -588,7 +751,6 @@ describe('CodexRemoteServer thread history', () => {
     const server = new CodexRemoteServer({
       surface: fakeSurface(conversation),
       token: 'test-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
@@ -614,6 +776,62 @@ describe('CodexRemoteServer thread history', () => {
     await expect(messages.nextBinary()).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
   });
 
+  it('interrupts read-aloud immediately when audio recording starts', async () => {
+    const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
+    const loadedSnapshot = conversationSnapshot();
+    loadedSnapshot.messages = [{
+      id: 'message-assistant',
+      role: 'assistant',
+      status: 'complete',
+      parts: [{ type: 'text', text: 'A long reply that is still being spoken.' }],
+    }];
+    vi.mocked(conversation.load).mockResolvedValue(loadedSnapshot);
+    let synthesisSignal: AbortSignal | undefined;
+    let finishSynthesis!: (audio: Buffer) => void;
+    const synthesizeSpeech = vi.fn((_text: string, signal?: AbortSignal) => {
+      synthesisSignal = signal;
+      return new Promise<Buffer>((resolve) => {
+        finishSynthesis = resolve;
+      });
+    });
+    const server = new CodexRemoteServer({
+      surface: fakeSurface(conversation),
+      token: 'test-device-token',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+      realtimeVoiceAvailable: () => false,
+      transcribeAudio: vi.fn(async () => ({ text: 'A new prompt' })),
+      synthesizeSpeech,
+    });
+    servers.push(server);
+    const info = await server.start();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/agents/codex/device?token=test-device-token`,
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+
+    await messages.nextJson('hello');
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({
+      type: 'speak_message',
+      threadId: 'thread-1',
+      messageId: 'message-assistant',
+    }));
+    await expect(messages.nextJson('status')).resolves.toMatchObject({ status: 'speaking' });
+
+    socket.send(JSON.stringify({
+      type: 'audio_start',
+      threadId: 'thread-1',
+      sampleRate: 24_000,
+    }));
+
+    await expect(messages.nextJson('status')).resolves.toMatchObject({ status: 'recording' });
+    expect(synthesisSignal?.aborted).toBe(true);
+    finishSynthesis(Buffer.from([1, 2, 3, 4]));
+  });
+
   it('refuses to read a user message as an assistant reply', async () => {
     const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
     const loadedSnapshot = conversationSnapshot();
@@ -628,7 +846,6 @@ describe('CodexRemoteServer thread history', () => {
     const server = new CodexRemoteServer({
       surface: fakeSurface(conversation),
       token: 'test-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
@@ -679,7 +896,6 @@ describe('CodexRemoteServer thread history', () => {
     const server = new CodexRemoteServer({
       surface: fakeSurface(conversation),
       token: 'test-device-token',
-      defaultCwd: '/tmp/project',
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
@@ -817,6 +1033,10 @@ function fakeConversation(realtime: CodexRealtimeSession): CodexConversation {
       messages: [],
       threadStatus: { type: 'idle' as const },
     })),
+    readPromptHistory: vi.fn(async () => ({
+      conversationId: 'thread-1',
+      prompts: [],
+    })),
     loadOlderHistory: vi.fn(async () => ({
       conversationId: 'thread-1',
       messages: [],
@@ -853,6 +1073,7 @@ function fakeSurface(conversation: CodexConversation): CodexSurface {
     onEvent: vi.fn(() => () => undefined),
     getSnapshot: vi.fn(() => snapshot),
     listConversations: vi.fn(async () => []),
+    createConversation: vi.fn(async () => snapshot),
     conversation: vi.fn(() => conversation),
   } as unknown as CodexSurface;
 }

@@ -4,14 +4,15 @@
   <img src="docs/images/codex-remote-hero.png" alt="Codex Remote pocket voice remote product banner" width="100%">
 </p>
 
-Codex Remote turns a Waveshare ESP32-S3-Touch-AMOLED-1.8 into a pocket
-controller for Codex conversations running on a desktop computer.
+Codex Remote turns a
+[Waveshare ESP32-S3-Touch-AMOLED-1.8](https://www.amazon.com/dp/B0DW8Z8ZYF)
+into a pocket controller for Codex conversations running on a desktop computer.
 
 The project has two parts:
 
-- A macOS Electron host that connects to the desktop-owned Codex app-server,
-  advertises itself on the local network, pairs devices, transcribes microphone
-  audio, and streams assistant speech.
+- A macOS Electron host that connects to the desktop-owned Codex app-server
+  when available, otherwise starts one itself, advertises on the local network,
+  pairs devices, transcribes microphone audio, and streams assistant speech.
 - Native PlatformIO/Arduino firmware for the Waveshare board. It discovers
   hosts, lists agents and conversations, records prompts, displays the latest
   five summarized turns, and plays assistant replies.
@@ -24,7 +25,7 @@ connect directly to Codex or store an OpenAI API key.
 The complete voice experience currently targets:
 
 - macOS host
-- Waveshare ESP32-S3-Touch-AMOLED-1.8 V1 or V2
+- [Waveshare ESP32-S3-Touch-AMOLED-1.8 V1 or V2](https://www.amazon.com/dp/B0DW8Z8ZYF)
 - 2.4 GHz Wi-Fi for the ESP32; the Mac may use any band on the same LAN
 - an authenticated Codex desktop session
 
@@ -107,6 +108,8 @@ In a conversation, PWR supports both recording styles without a setting:
 - Tap PWR to start, speak, then tap PWR again to send.
 - Hold PWR for roughly half a second, speak while holding, then release to send.
 
+Starting either recording mode immediately interrupts assistant read-aloud.
+
 The PMU's hardware long-press shutdown is temporarily disabled while recording,
 so push-to-talk cannot turn the board off. Outside recording, holding PWR for
 about ten seconds powers the device down.
@@ -143,7 +146,7 @@ behavior before flashing hardware.
 ## Hardware and upstream sources
 
 The firmware targets the
-[Waveshare ESP32-S3-Touch-AMOLED-1.8](https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-1.8):
+[Waveshare ESP32-S3-Touch-AMOLED-1.8](https://www.amazon.com/dp/B0DW8Z8ZYF):
 a 368 x 448 AMOLED board with a microphone, speaker, capacitive touch,
 AXP2101 power management, 8 MB PSRAM, and 16 MB flash. V1 uses the
 SH8601/FT3168 display and touch controllers; V2 uses CO5300/CST820.

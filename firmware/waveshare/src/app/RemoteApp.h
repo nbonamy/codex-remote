@@ -29,6 +29,7 @@ private:
   String _readerMessageId;
   int _readerPage = 0;
   bool _awaitingResponse = false;
+  bool _startRecordingWhenThreadReady = false;
   String _responseBaselineId;
   bool _recording = false;
   bool _powerTalkCandidate = false;

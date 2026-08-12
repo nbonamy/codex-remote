@@ -50,7 +50,7 @@ must pair again.
 
 ## Agent list is empty or Codex shows an error
 
-For the `Codex` agent, verify the shared socket:
+The `Codex` agent prefers the shared socket, which you can verify with:
 
 ```bash
 ls -l ~/.codex/app-server-control/app-server-control.sock
@@ -62,9 +62,10 @@ An error such as:
 connect ENOENT .../.codex/app-server-control/app-server-control.sock
 ```
 
-means the desktop-owned daemon socket does not exist. Fully quit and relaunch
-the desktop Codex application with `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1`, then
-restart Codex Remote.
+means the desktop-owned daemon socket does not exist. Current Codex Remote
+builds automatically fall back to a managed app-server under `~/.codex`. If the
+agent still fails, confirm that the installed app is current and inspect its
+error for a managed app-server launch or authentication failure.
 
 The optional `Claw` profile uses `~/.codex-claw/codex-home`; check its separate
 authentication state if only that agent fails.

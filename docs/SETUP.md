@@ -75,16 +75,16 @@ Do not replace the `file:../codex-app-sdk` dependency with the raw Git URL. The
 SDK contains internal npm workspaces that currently need the complete sibling
 checkout and its build output.
 
-## 3. Make the desktop Codex socket available
+## 3. Codex app-server connection
 
-The `Codex` agent reuses the app-server owned by the desktop Codex session. It
-expects this Unix socket:
+The `Codex` agent prefers to reuse the app-server owned by the desktop Codex
+session through this Unix socket:
 
 ```text
 ~/.codex/app-server-control/app-server-control.sock
 ```
 
-Check it before starting Codex Remote:
+You can check whether that preferred connection is available:
 
 ```bash
 test -S ~/.codex/app-server-control/app-server-control.sock \
@@ -92,17 +92,19 @@ test -S ~/.codex/app-server-control/app-server-control.sock \
   || echo "Codex socket missing"
 ```
 
-If it is missing, fully quit the desktop application and relaunch it with its
-shared local daemon enabled. For the ChatGPT macOS application, the direct
-launch form is:
+If it is missing, Codex Remote automatically starts a managed stdio app-server
+using `~/.codex`, so no special desktop launch mode is required. To explicitly
+enable the shared daemon in the ChatGPT macOS application, use:
 
 ```bash
 CODEX_APP_SERVER_USE_LOCAL_DAEMON=1 \
   /Applications/ChatGPT.app/Contents/MacOS/ChatGPT
 ```
 
-Keep the desktop app running. Codex Remote connects as a second client; it does
-not attach to a PID or inject prompts through deep links.
+With the shared daemon enabled, keep the desktop app running. Codex Remote
+connects as a second client; it does not attach to a PID or inject prompts
+through deep links. Without it, the managed fallback remains available for the
+lifetime of Codex Remote.
 
 The optional `Claw` agent uses a managed app-server under:
 

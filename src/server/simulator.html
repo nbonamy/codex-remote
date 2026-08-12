@@ -680,6 +680,8 @@
       let audioProcessor;
       let playbackContext;
       let playbackCursor = 0;
+      let suppressPlayback = false;
+      const playbackSources = new Set();
 
       function connect() {
         if (state.switchingAgent) return;
@@ -1239,6 +1241,8 @@
           showToast("Speech transcription is unavailable on this desktop.");
           return;
         }
+        suppressPlayback = true;
+        stopOutputPlayback();
         try {
           mediaStream = await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -1270,6 +1274,7 @@
           });
           render();
         } catch (error) {
+          suppressPlayback = false;
           showToast(error instanceof Error ? error.message : String(error));
         }
       }
@@ -1295,6 +1300,7 @@
 
       function stopLocalRecording() {
         state.recording = false;
+        suppressPlayback = false;
         audioProcessor?.disconnect();
         audioSource?.disconnect();
         mediaStream?.getTracks().forEach((track) => track.stop());
@@ -1323,8 +1329,9 @@
       }
 
       async function playOutputPcm(data) {
+        if (suppressPlayback) return;
         const bytes = data instanceof ArrayBuffer ? data : await data.arrayBuffer();
-        if (bytes.byteLength < 2) return;
+        if (suppressPlayback || bytes.byteLength < 2) return;
         playbackContext ||= new AudioContext();
         if (playbackContext.state === "suspended") await playbackContext.resume();
         const input = new DataView(bytes);
@@ -1337,9 +1344,24 @@
         const source = playbackContext.createBufferSource();
         source.buffer = buffer;
         source.connect(playbackContext.destination);
+        playbackSources.add(source);
+        source.addEventListener("ended", () => playbackSources.delete(source), { once: true });
         const startsAt = Math.max(playbackContext.currentTime + 0.02, playbackCursor);
         source.start(startsAt);
         playbackCursor = startsAt + buffer.duration;
+      }
+
+      function stopOutputPlayback() {
+        for (const source of playbackSources) {
+          try {
+            source.stop();
+          } catch {
+            // A source that ended between frames is already stopped.
+          }
+          source.disconnect();
+        }
+        playbackSources.clear();
+        playbackCursor = playbackContext?.currentTime ?? 0;
       }
 
       function showToast(message, duration = 3000) {

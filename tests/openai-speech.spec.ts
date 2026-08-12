@@ -62,7 +62,28 @@ describe('OpenAI speech synthesis', () => {
 
     expect(await synthesize?.('Fallback')).toStrictEqual(Buffer.from([5, 6]));
     expect(onOpenAiError).toHaveBeenCalledOnce();
-    expect(appleSpeech).toHaveBeenCalledWith('Fallback');
+    expect(appleSpeech).toHaveBeenCalledWith('Fallback', undefined);
+  });
+
+  it('does not start the Apple fallback after speech is cancelled', async () => {
+    const appleSpeech = vi.fn(async () => Buffer.from([5, 6]));
+    const synthesize = createHostSpeechSynthesizer({
+      platform: 'darwin',
+      environment: { OPENAI_API_KEY: 'test-key' },
+      appleSpeech,
+      fetch: vi.fn((_input, init) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'));
+        }, { once: true });
+      })),
+    });
+    const controller = new AbortController();
+
+    const pending = synthesize?.('Stop speaking', controller.signal);
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(appleSpeech).not.toHaveBeenCalled();
   });
 
   it('keeps Apple speech as the keyless macOS provider', async () => {

@@ -27,12 +27,13 @@ export function createHostSpeechSynthesizer(
     instructions: environment.CODEX_REMOTE_TTS_INSTRUCTIONS,
     fetch: options.fetch,
   });
-  return async (text) => {
+  return async (text, signal) => {
     try {
-      return await openAiSpeech(text);
+      return await openAiSpeech(text, signal);
     } catch (error) {
+      if (signal?.aborted) throw error;
       options.onOpenAiError?.(error);
-      if (appleSpeech) return appleSpeech(text);
+      if (appleSpeech) return appleSpeech(text, signal);
       throw error;
     }
   };

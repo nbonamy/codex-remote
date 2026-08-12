@@ -13,6 +13,7 @@ import type {
 } from 'codex-app-sdk/node';
 import type {
   CodexRealtimeEvent,
+  CodexSurfaceApproval,
   CodexSurfaceSnapshot,
   SurfaceMessage,
 } from 'codex-app-sdk/surface';
@@ -42,7 +43,6 @@ import { pcm16LeToWave } from './wav';
 export type RemoteServerInfo = {
   port: number;
   token: string;
-  defaultCwd: string;
   localUrl: string;
   networkUrls: string[];
   simulatorUrl: string;
@@ -63,7 +63,6 @@ export type RemoteServerOptions = {
   token: string;
   agentId?: string;
   agentName?: string;
-  defaultCwd: string;
   simulatorHtml: string;
   listenAddress?: string;
   port?: number;
@@ -79,7 +78,15 @@ export type RemoteServerOptions = {
 };
 
 export type SpeechAudio = Uint8Array | AsyncIterable<Uint8Array>;
-export type SpeechSynthesizer = (text: string) => Promise<SpeechAudio>;
+export type SpeechSynthesizer = (
+  text: string,
+  signal?: AbortSignal,
+) => Promise<SpeechAudio>;
+
+type DeviceSpeech = {
+  controller: AbortController;
+  cancelled: Promise<void>;
+};
 
 type AudioCapture = {
   byteLength: number;
@@ -105,6 +112,7 @@ type DeviceSession = {
   audio: AudioCapture | null;
   realtime: DeviceRealtime | null;
   pending: Promise<void>;
+  speech: DeviceSpeech | null;
   closed: boolean;
 };
 
@@ -129,6 +137,7 @@ export class CodexRemoteServer {
   });
   private readonly sessions = new Set<DeviceSession>();
   private readonly conversationBroadcastTimers = new Map<string, NodeJS.Timeout>();
+  private readonly resolvingApprovalIds = new Set<string>();
   private readonly agents: RemoteCodexAgent[];
   private readonly unsubscribeAgentListeners: Array<() => void> = [];
   private bonjour: Bonjour | null = null;
@@ -175,13 +184,20 @@ export class CodexRemoteServer {
     });
     for (const agent of this.agents) {
       this.unsubscribeAgentListeners.push(
-        agent.surface.onStateChange(() => this.broadcastThreads(agent.id)),
+        agent.surface.onStateChange((snapshot) => {
+          this.denyPendingApprovals(agent, snapshot.approvals);
+          this.broadcastThreads(agent.id);
+        }),
         agent.surface.onEvent((event) => {
+          if (event.type === 'approval.requested') {
+            this.denyPendingApprovals(agent, [event.payload.approval]);
+          }
           if ('conversationId' in event) {
             this.scheduleConversationBroadcast(agent.id, event.conversationId);
           }
         }),
       );
+      this.denyPendingApprovals(agent, agent.surface.getSnapshot().approvals);
     }
   }
 
@@ -214,7 +230,6 @@ export class CodexRemoteServer {
     this.info = {
       port,
       token: this.options.token,
-      defaultCwd: this.options.defaultCwd,
       localUrl,
       networkUrls,
       simulatorUrl: `${localUrl}/simulator?token=${
@@ -400,7 +415,6 @@ export class CodexRemoteServer {
           status: snapshot.status,
           account: snapshot.authentication.account?.type ?? null,
           threadCount: snapshot.conversations.length,
-          defaultCwd: this.options.defaultCwd,
           realtimeVoiceAvailable: this.isRealtimeVoiceAvailable(agent),
           agentId: agent.id,
           agentName: agent.name,
@@ -417,13 +431,20 @@ export class CodexRemoteServer {
       if (request.method === 'POST' && path === '/threads') {
         const body = await readJsonBody(request);
         const snapshot = await agent.surface.createConversation({
-          cwd: this.options.defaultCwd,
+          approvalMode: 'never',
+          permissionMode: 'workspace-write',
         });
         const threadId = snapshot.activeConversationId;
         if (!threadId) throw new Error('Codex did not return a new thread id');
         const prompt = recordString(body, 'text', false);
-        if (prompt) await this.sendPrompt(agent, threadId, prompt);
-        sendJson(response, 201, await this.threadPayload(agent, threadId));
+        if (prompt) {
+          await this.sendPrompt(agent, threadId, prompt);
+          sendJson(response, 201, await this.threadPayload(agent, threadId));
+        } else {
+          sendJson(response, 201, {
+            thread: toDeviceThreadState(snapshot, threadId),
+          });
+        }
         return;
       }
 
@@ -544,6 +565,7 @@ export class CodexRemoteServer {
       audio: null,
       realtime: null,
       pending: Promise.resolve(),
+      speech: null,
       closed: false,
     };
     this.sessions.add(session);
@@ -560,6 +582,9 @@ export class CodexRemoteServer {
     this.sendThreads(session);
 
     socket.on('message', (data, isBinary) => {
+      if (isAudioStartControl(data, isBinary)) {
+        this.cancelSpeech(session);
+      }
       session.pending = session.pending.then(() => (
         session.closed
           ? undefined
@@ -569,6 +594,7 @@ export class CodexRemoteServer {
     const detach = () => {
       if (session.closed) return;
       session.closed = true;
+      this.cancelSpeech(session);
       this.sessions.delete(session);
       void session.pending.then(() => this.releaseRealtime(session));
     };
@@ -594,13 +620,17 @@ export class CodexRemoteServer {
           return;
         case 'create_thread': {
           const snapshot = await session.agent.surface.createConversation({
-            cwd: this.options.defaultCwd,
+            approvalMode: 'never',
+            permissionMode: 'workspace-write',
           });
           const threadId = snapshot.activeConversationId;
           if (!threadId) throw new Error('Codex did not return a new thread id');
           if (session.threadId !== threadId) await this.releaseRealtime(session);
           session.threadId = threadId;
-          await this.sendThread(session, threadId);
+          this.send(session, {
+            type: 'thread',
+            thread: toDeviceThreadState(snapshot, threadId),
+          });
           this.broadcastThreads(session.agent.id);
           return;
         }
@@ -807,33 +837,67 @@ export class CodexRemoteServer {
     if (message.role !== 'assistant') throw new Error('Only assistant replies can be read aloud');
     if (!message.text.trim()) throw new Error('That assistant reply has no readable text');
 
+    const speech = this.beginSpeech(session);
     this.send(session, {
       type: 'status',
       status: 'speaking',
       detail: 'Reading the assistant reply',
     });
-    if (this.options.synthesizeSpeech) {
-      const audio = await this.options.synthesizeSpeech(message.text);
-      const sent = await this.sendSpeechAudio(session, audio);
-      if (!sent) throw new Error('Speech synthesis returned no audio');
-      this.send(session, { type: 'status', status: 'ready' });
-      return;
-    }
+    try {
+      if (this.options.synthesizeSpeech) {
+        let audio: SpeechAudio | null;
+        try {
+          audio = await Promise.race([
+            this.options.synthesizeSpeech(message.text, speech.controller.signal),
+            speech.cancelled.then(() => null),
+          ]);
+        } catch (error) {
+          if (speech.controller.signal.aborted) return;
+          throw error;
+        }
+        if (audio === null) return;
+        let sent: boolean | null;
+        try {
+          sent = await this.sendSpeechAudio(session, audio, speech);
+        } catch (error) {
+          if (speech.controller.signal.aborted) return;
+          throw error;
+        }
+        if (sent === null) return;
+        if (!sent) throw new Error('Speech synthesis returned no audio');
+        this.send(session, { type: 'status', status: 'ready' });
+        return;
+      }
 
-    if (!this.isRealtimeVoiceAvailable(session.agent)) {
-      throw new Error('Reading replies aloud is unavailable on this desktop');
+      if (!this.isRealtimeVoiceAvailable(session.agent)) {
+        throw new Error('Reading replies aloud is unavailable on this desktop');
+      }
+      const realtime = await this.ensureRealtime(session, threadId);
+      await realtime.handle.appendSpeech(message.text);
+    } finally {
+      if (session.speech === speech) session.speech = null;
     }
-    const realtime = await this.ensureRealtime(session, threadId);
-    await realtime.handle.appendSpeech(message.text);
   }
 
   private async sendSpeechAudio(
     session: DeviceSession,
     audio: SpeechAudio,
-  ): Promise<boolean> {
+    speech: DeviceSpeech,
+  ): Promise<boolean | null> {
     let carry: Buffer<ArrayBufferLike> = Buffer.alloc(0);
     let sentBytes = 0;
-    for await (const value of speechAudioChunks(audio)) {
+    const iterator = speechAudioChunks(audio)[Symbol.asyncIterator]();
+    while (true) {
+      const next = await Promise.race([
+        iterator.next(),
+        speech.cancelled.then(() => null),
+      ]);
+      if (next === null) {
+        void iterator.return?.(undefined).catch(() => undefined);
+        return null;
+      }
+      if (next.done) break;
+      const value = next.value;
       if (session.closed || session.socket.readyState !== WebSocket.OPEN) {
         return sentBytes > 0;
       }
@@ -847,6 +911,7 @@ export class CodexRemoteServer {
       );
       const playableLength = available - (available % 2);
       for (let offset = 0; offset < playableLength; offset += 4_800) {
+        if (speech.controller.signal.aborted) return null;
         if (session.closed || session.socket.readyState !== WebSocket.OPEN) {
           return sentBytes > 0;
         }
@@ -856,11 +921,27 @@ export class CodexRemoteServer {
         );
         session.socket.send(frame);
         sentBytes += frame.byteLength;
+        await new Promise<void>((resolve) => setImmediate(resolve));
       }
       if (sentBytes >= MAX_AUDIO_BYTES) break;
       carry = combined.subarray(playableLength);
     }
     return sentBytes > 0;
+  }
+
+  private beginSpeech(session: DeviceSession): DeviceSpeech {
+    this.cancelSpeech(session);
+    const controller = new AbortController();
+    const cancelled = new Promise<void>((resolve) => {
+      controller.signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+    const speech = { controller, cancelled };
+    session.speech = speech;
+    return speech;
+  }
+
+  private cancelSpeech(session: DeviceSession): void {
+    session.speech?.controller.abort();
   }
 
   private async ensureRealtime(
@@ -998,9 +1079,21 @@ export class CodexRemoteServer {
   ): Promise<{
     thread: ReturnType<typeof toDeviceThreadState>;
   }> {
-    const snapshot = agent.readRecentMessages
-      ? recentThreadSnapshot(agent, threadId, await agent.readRecentMessages(threadId))
-      : await loadConversationSnapshot(agent.surface.conversation(threadId));
+    let snapshot: CodexSurfaceSnapshot;
+    if (agent.readRecentMessages) {
+      try {
+        snapshot = recentThreadSnapshot(
+          agent,
+          threadId,
+          await agent.readRecentMessages(threadId),
+        );
+      } catch (error) {
+        if (!isUnmaterializedThreadError(error)) throw error;
+        snapshot = recentThreadSnapshot(agent, threadId, []);
+      }
+    } else {
+      snapshot = await loadConversationSnapshot(agent.surface.conversation(threadId));
+    }
     return {
       thread: toDeviceThreadState(snapshot, threadId),
     };
@@ -1037,16 +1130,32 @@ export class CodexRemoteServer {
       session.agent.id === agentId && session.threadId === threadId
     ));
     if (matching.length === 0) return;
-    const conversation = agent.surface.conversation(threadId);
     try {
-      const snapshot = await loadConversationSnapshot(conversation);
+      const { thread } = await this.threadPayload(agent, threadId);
       const message: DeviceServerMessage = {
         type: 'thread',
-        thread: toDeviceThreadState(snapshot, threadId),
+        thread,
       };
       for (const session of matching) this.send(session, message);
     } catch (error) {
       for (const session of matching) this.sendError(session, error);
+    }
+  }
+
+  private denyPendingApprovals(
+    agent: RemoteCodexAgent,
+    approvals: readonly CodexSurfaceApproval[],
+  ): void {
+    for (const approval of approvals) {
+      const key = `${agent.id}:${approval.conversationId}:${approval.id}`;
+      if (this.resolvingApprovalIds.has(key)) continue;
+      this.resolvingApprovalIds.add(key);
+      void agent.surface.conversation(approval.conversationId)
+        .resolveApproval(approval.id, 'deny', 'once')
+        .catch((error) => {
+          console.error('Failed to deny unsupported device approval', error);
+        })
+        .finally(() => this.resolvingApprovalIds.delete(key));
     }
   }
 
@@ -1211,6 +1320,27 @@ function rawDataBuffer(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
   if (Array.isArray(data)) return Buffer.concat(data);
   return Buffer.from(data);
+}
+
+function isAudioStartControl(data: RawData, isBinary: boolean): boolean {
+  if (isBinary) return false;
+  try {
+    const value = JSON.parse(rawDataBuffer(data).toString('utf8')) as unknown;
+    return Boolean(
+      value
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && (value as Record<string, unknown>).type === 'audio_start',
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isUnmaterializedThreadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('is not materialized yet')
+    && message.includes('thread/turns/list');
 }
 
 function lanAddresses(): string[] {

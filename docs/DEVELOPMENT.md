@@ -21,7 +21,8 @@ The Electron main process:
 1. Loads `.env.local`.
 2. Opens the persisted pairing store and host token.
 3. Connects the `Codex` surface to
-   `~/.codex/app-server-control/app-server-control.sock`.
+   `~/.codex/app-server-control/app-server-control.sock` when available, or
+   starts a managed stdio app-server under `~/.codex` as a fallback.
 4. Starts a managed stdio surface for the optional `Claw` profile.
 5. Starts one HTTP/WebSocket server on `0.0.0.0:47776`.
 6. Advertises `_codex-remote._tcp.local` over Bonjour/mDNS.
@@ -62,8 +63,8 @@ never requests older history.
 
 ## Local development
 
-Requirements: Node 22+, an already-built sibling SDK, and an available shared
-Codex socket.
+Requirements: Node 22+ and an already-built sibling SDK. A shared Codex socket
+is preferred but optional because the host can start its own app-server.
 
 ```bash
 npm install

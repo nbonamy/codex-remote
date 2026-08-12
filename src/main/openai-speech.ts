@@ -20,9 +20,10 @@ export function createOpenAiSpeechSynthesizer(
   const instructions = options.instructions?.trim()
     || 'Speak naturally in English with a warm, conversational tone, clear pacing, and subtle expression.';
 
-  return async (text) => {
+  return async (text, signal) => {
     const response = await fetchSpeech(OPENAI_SPEECH_URL, {
       method: 'POST',
+      signal,
       headers: {
         Authorization: `Bearer ${options.apiKey}`,
         'Content-Type': 'application/json',

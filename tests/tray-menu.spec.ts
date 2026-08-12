@@ -148,7 +148,6 @@ function agent(
 function server(): NonNullable<CodexRemoteDesktopState['server']> {
   return {
     port: 47_776,
-    defaultCwd: '/tmp/project',
     localUrl: 'http://127.0.0.1:47776',
     networkUrls: [],
     simulatorUrl: 'http://127.0.0.1:47776/simulator?token=secret&agentId=codex',

@@ -32,7 +32,8 @@ pairing, compare the six-digit code, and approve it on the Mac.
 
 After pairing, the agent list can contain:
 
-- **Codex**, backed by the shared desktop Codex socket under `~/.codex`.
+- **Codex**, backed by the shared desktop Codex socket when available or a
+  managed app-server under `~/.codex` otherwise.
 - **Claw**, backed by the managed Codex home under
   `~/.codex-claw/codex-home`.
 
@@ -46,7 +47,8 @@ The list displays five large conversation titles at a time.
 - Tap a title to open it.
 - Swipe up to advance by four conversations.
 - Swipe down to go back by four conversations.
-- Tap **Create** at the bottom or press PWR to create a new conversation.
+- Tap **Create** at the bottom or press PWR to create a new conversation. The
+  device starts listening as soon as the host returns the new thread.
 - Press BOOT to return to agent selection.
 
 The ESP32 does not hydrate an entire long conversation. It requests only the
@@ -73,6 +75,8 @@ an older assistant message.
 ## Recording a prompt
 
 PWR supports two styles automatically.
+
+Starting either mode immediately stops any assistant read-aloud in progress.
 
 ### Tap to start, tap to end
 

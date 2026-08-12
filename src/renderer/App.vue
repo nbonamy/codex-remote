@@ -103,12 +103,6 @@ function agentStatusLabel(agent: CodexRemoteDesktopState['agents'][number]): str
             {{ state.server.token }}
           </button>
         </article>
-        <article>
-          <span>Default workspace</span>
-          <button @click="copy(state.server?.defaultCwd)">
-            {{ state.server.defaultCwd }}
-          </button>
-        </article>
       </div>
 
       <div class="note">

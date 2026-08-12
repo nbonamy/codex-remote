@@ -307,6 +307,11 @@ void RemoteApp::onRemoteStateChanged() {
       !_client.selectingAgent()) {
     _view = View::Threads;
   }
+  if (_startRecordingWhenThreadReady && _view == View::Conversation &&
+      _client.connected() && !_client.activeThreadId().isEmpty()) {
+    _startRecordingWhenThreadReady = false;
+    startRecording();
+  }
   updateReaderSelection();
   _dirty = true;
 }
@@ -620,6 +625,7 @@ void RemoteApp::openThread(int index) {
     return;
   }
   const RemoteThread &thread = _client.thread(index);
+  _startRecordingWhenThreadReady = false;
   _client.clearActiveThread();
   if (!_client.openThread(thread.id)) {
     return;
@@ -633,7 +639,9 @@ void RemoteApp::openThread(int index) {
 
 void RemoteApp::createThread() {
   _client.clearActiveThread();
+  _startRecordingWhenThreadReady = true;
   if (!_client.createThread()) {
+    _startRecordingWhenThreadReady = false;
     return;
   }
   _readerMessageId = "";
@@ -644,6 +652,7 @@ void RemoteApp::createThread() {
 }
 
 void RemoteApp::backToThreads() {
+  _startRecordingWhenThreadReady = false;
   _audio.stopPlayback();
   _playbackActive = false;
   _ignoreRemoteAudio = true;
@@ -668,6 +677,7 @@ void RemoteApp::backFromAgents() {
 }
 
 void RemoteApp::showAgents() {
+  _startRecordingWhenThreadReady = false;
   _view = View::Agents;
   _agentPage = 0;
   _dirty = true;
@@ -1010,6 +1020,12 @@ void RemoteApp::handleSerialDebug() {
       pageBack();
     } else if (_serialCommand == "$PAGE_FORWARD") {
       pageForward();
+    } else if (_serialCommand == "$PWR" && _view == View::Conversation) {
+      if (_recording) {
+        stopRecording();
+      } else if (!_awaitingResponse) {
+        startRecording();
+      }
     } else if (_serialCommand.startsWith("$TAP ")) {
       const int separator = _serialCommand.indexOf(' ', 5);
       if (separator > 5) {

@@ -775,10 +775,12 @@ void RemoteClient::handleMessage(WebsocketsMessage message) {
     parseThread(document["thread"].as<JsonObjectConst>());
   } else if (type == "status") {
     _status = String(document["status"] | "ready");
+    _error = "";
   } else if (type == "transcript") {
     const String role = document["role"] | "";
     const String text = document["text"] | "";
     _status = role == "user" ? "Heard: " + text : "Codex: " + text;
+    _error = "";
   } else if (type == "error") {
     _error = String(document["message"] | "Remote error");
     _status = "Error";

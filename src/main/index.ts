@@ -11,8 +11,6 @@ import {
   type NativeImage,
 } from 'electron';
 import {
-  CodexAppServerStdioTransport,
-  CodexAppServerUnixSocketTransport,
   CodexSurface,
   transcribeWithAppleSpeechAnalyzer,
 } from 'codex-app-sdk/node';
@@ -28,6 +26,7 @@ import {
   codexAgentProfiles,
   type CodexRemoteAgentProfile,
 } from './agent-profiles';
+import { createAgentTransport } from './agent-transport';
 import type {
   CodexRemoteDesktopState,
   CodexRemoteAgentState,
@@ -36,6 +35,19 @@ import { createHostSpeechSynthesizer } from './host-speech';
 import { trayMenuTemplate } from './tray-menu';
 
 const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAACOSURBVHgBpZLRDYAgEEOrEzgCozCCGzkCbKArOIlugJvgoRAUNcLRpvGH19TkgFQWkqIohhK8UEaKwKcsOg/+WR1vX+AlA74u6q4FqgCOSzwsGHCwbKliAF89Cv89tWmOT4VaVMoVbOBrdQUz+FrD6XItzh4LzYB1HFJ9yrEkZ4l+wvcid9pTssh4UKbPd+4vED2Nd54iAAAAAElFTkSuQmCC';
+
+export const DEVICE_DEVELOPER_INSTRUCTIONS = `
+The user is interacting through Codex Remote on a Waveshare
+ESP32-S3-Touch-AMOLED-1.8: a handheld device with a 1.8-inch, 368 by 448 pixel
+AMOLED display. Treat these hardware facts as known when the user asks about
+the device. You may reason and use tools normally, but optimize the final
+user-facing answer for the device:
+- Lead with the answer and keep it concise, normally one to four short sentences.
+- Use plain text and short paragraphs. Avoid headings, tables, and long lists.
+- Do not include HTML, Markdown links, or raw URLs unless the user explicitly asks for them.
+- Make the final answer self-contained; the device displays and may read aloud only the final answer, not commentary or intermediate work.
+- Avoid unnecessary follow-up questions, process narration, and decorative emoji.
+`.trim();
 
 type AgentRuntime = {
   profile: CodexRemoteAgentProfile;
@@ -135,7 +147,6 @@ function refreshTrayMenu(): void {
 }
 
 async function startServices(): Promise<void> {
-  const defaultCwd = process.env.CODEX_REMOTE_CWD?.trim() || join(homedir(), 'src');
   const profiles = codexAgentProfiles(homedir());
   desktopState = {
     ...desktopState,
@@ -151,22 +162,30 @@ async function startServices(): Promise<void> {
   pairing.onChange(refreshPairingState);
   refreshPairingState();
 
-  agentRuntimes = profiles.map((profile) => {
-    const transport = profile.transport.type === 'unixSocket'
-      ? new CodexAppServerUnixSocketTransport(profile.transport)
-      : new CodexAppServerStdioTransport({
-        codexHome: profile.codexHome,
-        cwd: defaultCwd,
-      });
+  agentRuntimes = await Promise.all(profiles.map(async (profile) => {
+    const transport = await createAgentTransport(profile, {
+      onSocketFallback: (error) => {
+        console.warn(
+          'Shared Codex socket unavailable; starting a managed app-server',
+          error,
+        );
+      },
+    });
     const client = new CodexAppServerClient(
       transport,
     );
     const surface = new CodexSurface({
       client,
       codexHome: profile.codexHome,
-      cwd: defaultCwd,
+      approvalMode: 'never',
+      permissionMode: 'workspace-write',
       autoSelectFirstConversation: false,
       loadingStrategy: 'lazy',
+      extensions: [{
+        configureConversation: () => ({
+          developerInstructions: DEVICE_DEVELOPER_INSTRUCTIONS,
+        }),
+      }],
       clientInfo: {
         name: profile.id === 'codex' ? 'codex_remote' : `codex_remote_${profile.id}`,
         title: `Codex Remote · ${profile.name}`,
@@ -183,7 +202,7 @@ async function startServices(): Promise<void> {
       });
     });
     return { profile, client, surface };
-  });
+  }));
 
   await Promise.all(agentRuntimes.map(async ({ profile, surface }) => {
     publishAgentState(profile.id, { codexStatus: 'connecting', error: null });
@@ -216,7 +235,6 @@ async function startServices(): Promise<void> {
   server = new CodexRemoteServer({
     agents: remoteAgents,
     token,
-    defaultCwd,
     simulatorHtml,
     port: parsedPort(process.env.CODEX_REMOTE_PORT),
     pairing,
@@ -231,7 +249,6 @@ async function startServices(): Promise<void> {
     error: null,
     server: {
       port: info.port,
-      defaultCwd: info.defaultCwd,
       localUrl: info.localUrl,
       networkUrls: info.networkUrls,
       simulatorUrl: info.simulatorUrl,

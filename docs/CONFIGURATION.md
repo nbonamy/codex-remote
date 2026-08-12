@@ -99,18 +99,19 @@ the Samantha voice.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CODEX_REMOTE_PORT` | `47776` | TCP port for HTTP and the device WebSocket. |
-| `CODEX_REMOTE_CWD` | `~/src` | Default working directory for new Codex conversations. |
 
 Example:
 
 ```bash
-CODEX_REMOTE_PORT=47776 \
-CODEX_REMOTE_CWD="$HOME/src" \
-npm run dev
+CODEX_REMOTE_PORT=47776 npm run dev
 ```
 
 Changing the port also requires changing `CODEX_REMOTE_SERVER_PORT` in firmware
 and reflashing the device.
+
+Codex Remote does not inject a working directory when it creates a thread. The
+app-server chooses its normal context instead of every device conversation
+being tied to one host folder.
 
 ## Firmware network configuration
 
@@ -181,6 +182,18 @@ Electron user data stores:
 - the packaged app's optional `.env.local`
 
 Revoking a device from the menu immediately closes matching device sessions.
+
+The device has no UI for reviewing Codex tool approvals. Threads created by
+Codex Remote therefore use workspace-write permissions with interactive
+approvals disabled. If an older thread asks for an approval inherited from
+another client, the host denies it automatically so the turn can continue and
+report the denied action instead of remaining stuck on **Thinking**.
+
+Codex Remote also injects device-specific developer instructions whenever it
+starts or resumes a conversation. They ask Codex to keep final answers short,
+plain, self-contained, suitable for speech, and free of links unless requested.
+These instructions are supplied by the Codex Remote surface only; they are not
+saved as global Codex memory and are not added to the visible user prompt.
 
 ## Network security boundary
 
