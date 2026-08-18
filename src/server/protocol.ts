@@ -39,11 +39,12 @@ export type DeviceClientCommand =
   | { type: 'list_threads' }
   | { type: 'close_thread' }
   | { type: 'create_thread' }
+  | { type: 'open_voice_chat'; threadId?: string }
   | { type: 'open_thread'; threadId: string }
   | { type: 'send_text'; threadId?: string; text: string }
   | { type: 'interrupt'; threadId?: string }
   | { type: 'speak_message'; threadId?: string; messageId: string }
-  | { type: 'audio_start'; threadId?: string; sampleRate?: number }
+  | { type: 'audio_start'; threadId?: string; sampleRate?: number; realtime?: boolean }
   | { type: 'audio_end' }
   | { type: 'audio_cancel' };
 
@@ -122,6 +123,11 @@ export function parseDeviceCommand(value: unknown): DeviceClientCommand {
         type: value.type,
         threadId: requiredString(value.threadId, 'threadId'),
       };
+    case 'open_voice_chat':
+      return {
+        type: value.type,
+        ...(optionalString(value.threadId) ? { threadId: optionalString(value.threadId) } : {}),
+      };
     case 'send_text':
       return {
         type: value.type,
@@ -149,6 +155,7 @@ export function parseDeviceCommand(value: unknown): DeviceClientCommand {
       return {
         type: value.type,
         sampleRate,
+        realtime: value.realtime === true,
         ...(optionalString(value.threadId) ? { threadId: optionalString(value.threadId) } : {}),
       };
     }

@@ -12,7 +12,7 @@ The project has two parts:
 
 - A macOS Electron host that connects to the desktop-owned Codex app-server
   when available, otherwise starts one itself, advertises on the local network,
-  pairs devices, transcribes microphone audio, and streams assistant speech.
+  pairs devices, and relays realtime or legacy voice traffic.
 - Native PlatformIO/Arduino firmware for the Waveshare board. It discovers
   hosts, lists agents and conversations, records prompts, displays the latest
   five summarized turns, and plays assistant replies.
@@ -80,18 +80,22 @@ The short version is:
 6. Start or install the macOS host, open pairing, and approve the code shown on
    the device.
 
-## Voice and the OpenAI API key
+## Voice paths and the optional OpenAI API key
 
-An OpenAI API key is optional on macOS.
+The dedicated Voice Chat uses the authenticated Codex app-server realtime
+session. The device streams PCM audio in; app-server returns transcription
+events and PCM audio deltas, which the host forwards directly to the screen and
+speaker. This path does not use Codex Remote's legacy transcription or TTS
+services, and does not fall back to them.
 
-| Host configuration | Spoken prompts | Assistant read-aloud |
-| --- | --- | --- |
-| No `OPENAI_API_KEY` | Apple SpeechAnalyzer on the Mac | Apple `say` using the Samantha voice |
-| `OPENAI_API_KEY` set | Codex realtime when available, with local transcription fallback | OpenAI `gpt-4o-mini-tts`, with Apple speech fallback if the request cannot start |
+Existing Codex threads keep the older text-turn workflow: Apple transcribes the
+recording, Codex receives the resulting text prompt, and the final answer is
+read with Apple speech. An optional `OPENAI_API_KEY` changes only that last
+read-aloud step to OpenAI TTS, with Apple speech as fallback. It must never be
+added to ESP32 `credentials.h`.
 
-The regular ChatGPT-authenticated Codex session does not require an API key.
-Without a key, both push-to-talk and read-aloud still work on macOS. The key is
-used only by the host and must never be added to ESP32 `credentials.h`.
+Voice Chat is hands-free after launch: press PWR once to start, speak naturally
+across multiple turns, and press BOOT to end it.
 
 See [Configuration and secrets](docs/CONFIGURATION.md) for exact `.env.local`
 locations, override variables, security boundaries, and the full voice matrix.

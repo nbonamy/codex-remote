@@ -79,10 +79,11 @@ public:
   const String &selectedAgentName() const { return _selectedAgentName; }
 
   bool createThread();
+  bool openVoiceChat();
   bool openThread(const String &threadId);
   bool closeThread();
   bool listThreads();
-  bool startAudio(const String &threadId);
+  bool startAudio(const String &threadId, bool realtime);
   bool sendAudio(const uint8_t *data, size_t length);
   bool endAudio();
   bool cancelAudio();
@@ -104,6 +105,11 @@ private:
     String token;
   };
 
+  struct StoredVoiceChat {
+    String agentKey;
+    String threadId;
+  };
+
   std::unique_ptr<websockets::WebsocketsClient> _ws;
   RemoteClientListener *_listener = nullptr;
   RemoteThread _threads[kMaxThreads];
@@ -111,15 +117,18 @@ private:
   RemoteHost _hosts[kMaxHosts];
   RemoteAgent _agents[kMaxAgents];
   StoredPairing _pairings[kMaxAgents];
+  StoredVoiceChat _voiceChats[kMaxAgents];
   int _threadCount = 0;
   int _messageCount = 0;
   int _hostCount = 0;
   int _agentCount = 0;
   int _pairingCount = 0;
+  int _voiceChatCount = 0;
   bool _connected = false;
   bool _selectingAgent = false;
   bool _pairingPending = false;
   bool _activeThreadBusy = false;
+  bool _openingVoiceChat = false;
   String _activeThreadId;
   String _activeThreadTitle;
   String _status = "Offline";
@@ -158,6 +167,9 @@ private:
                    const String &token);
   void forgetPairing(const String &hostId);
   void persistPairings();
+  String voiceChatThreadId() const;
+  void saveVoiceChatThreadId(const String &threadId);
+  void persistVoiceChats();
   void saveSelectedAgent();
   bool sendControl(JsonDocument &document);
   void handleMessage(websockets::WebsocketsMessage message);

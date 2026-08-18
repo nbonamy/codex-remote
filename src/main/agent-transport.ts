@@ -17,6 +17,19 @@ type AgentTransportDependencies = {
   onSocketFallback?: (error: unknown) => void;
 };
 
+const MANAGED_APP_SERVER_CONFIG_OVERRIDES = [
+  'features.realtime_conversation=true',
+];
+
+function managedAppServerOptions(
+  profile: CodexRemoteAgentProfile,
+): CodexAppServerStdioTransportOptions {
+  return {
+    codexHome: profile.codexHome,
+    configOverrides: MANAGED_APP_SERVER_CONFIG_OVERRIDES,
+  };
+}
+
 /**
  * Prefer the desktop-owned Codex socket, but keep the remote usable when the
  * desktop app was launched without its optional shared daemon.
@@ -28,7 +41,7 @@ export async function createAgentTransport(
   const createStdioTransport = dependencies.createStdioTransport
     ?? ((options) => new CodexAppServerStdioTransport(options));
   if (profile.transport.type === 'stdio') {
-    return createStdioTransport({ codexHome: profile.codexHome });
+    return createStdioTransport(managedAppServerOptions(profile));
   }
 
   const createUnixSocketTransport = dependencies.createUnixSocketTransport
@@ -40,6 +53,6 @@ export async function createAgentTransport(
   } catch (error) {
     await sharedTransport.close().catch(() => undefined);
     dependencies.onSocketFallback?.(error);
-    return createStdioTransport({ codexHome: profile.codexHome });
+    return createStdioTransport(managedAppServerOptions(profile));
   }
 }

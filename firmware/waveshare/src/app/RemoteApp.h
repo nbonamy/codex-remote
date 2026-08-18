@@ -29,6 +29,10 @@ private:
   String _readerMessageId;
   int _readerPage = 0;
   bool _awaitingResponse = false;
+  bool _voiceChatActive = false;
+  bool _voiceChatSessionActive = false;
+  bool _voiceChatReconnectPending = false;
+  bool _wasConnected = false;
   bool _startRecordingWhenThreadReady = false;
   String _responseBaselineId;
   bool _recording = false;
@@ -42,6 +46,7 @@ private:
   int16_t _touchLastX = 0;
   int16_t _touchLastY = 0;
   bool _playbackActive = false;
+  bool _responseHadRemoteAudio = false;
   bool _ignoreRemoteAudio = false;
   bool _autoReadReplies = false;
   uint8_t _displayBrightness = DEFAULT_BRIGHTNESS;
@@ -62,7 +67,7 @@ private:
   void pageForward();
   void pageBack();
   void openThread(int index);
-  void createThread();
+  void openVoiceChat();
   void backToThreads();
   void backFromAgents();
   void showAgents();
@@ -81,6 +86,8 @@ private:
   void loadSettings();
   void persistSettings();
   void startRecording();
+  void pauseVoiceChatCapture();
+  void resumeVoiceChatCapture();
   void stopRecording();
   void cancelRecording();
   void toggleAssistantSpeech();

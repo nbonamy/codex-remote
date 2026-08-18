@@ -263,6 +263,9 @@ void RemoteApp::update() {
     _audio.advancePlayback();
     if (_audio.playbackIdle()) {
       _playbackActive = false;
+      if (_voiceChatSessionActive && _client.status() == "ready") {
+        resumeVoiceChatCapture();
+      }
       _dirty = true;
     }
   }
@@ -283,6 +286,28 @@ void RemoteApp::update() {
 }
 
 void RemoteApp::onRemoteStateChanged() {
+  const bool connected = _client.connected();
+  if (_voiceChatActive && _wasConnected && !connected) {
+    if (_recording) {
+      _recording = false;
+      _audio.stopRecording();
+      Board::setPowerButtonShutdownEnabled(true);
+    }
+    _audio.stopPlayback();
+    _playbackActive = false;
+    _voiceChatSessionActive = false;
+    _voiceChatReconnectPending = true;
+    _startRecordingWhenThreadReady = true;
+    _client.clearActiveThread();
+  }
+  if (_voiceChatActive && !_wasConnected && connected &&
+      _voiceChatReconnectPending && _view == View::Conversation) {
+    _voiceChatReconnectPending = false;
+    if (!_client.openVoiceChat()) {
+      _voiceChatReconnectPending = true;
+    }
+  }
+  _wasConnected = connected;
   if (_client.status() == "ready") {
     _ignoreRemoteAudio = false;
   }
@@ -312,14 +337,27 @@ void RemoteApp::onRemoteStateChanged() {
     _startRecordingWhenThreadReady = false;
     startRecording();
   }
+  if (_voiceChatSessionActive && _client.status() == "speaking") {
+    pauseVoiceChatCapture();
+  } else if (_voiceChatSessionActive && _client.status() == "ready" &&
+             !_playbackActive) {
+    resumeVoiceChatCapture();
+  }
   updateReaderSelection();
   _dirty = true;
 }
 
 void RemoteApp::onRemoteAudio(const uint8_t *data, size_t length) {
-  if (_recording || _ignoreRemoteAudio) {
+  if (_ignoreRemoteAudio) {
     return;
   }
+  if (_recording) {
+    if (!_voiceChatSessionActive) {
+      return;
+    }
+    pauseVoiceChatCapture();
+  }
+  _responseHadRemoteAudio = true;
   if (!_playbackActive) {
     wakeScreen();
     _audio.resetPlayback();
@@ -350,7 +388,11 @@ void RemoteApp::handleButtons() {
   }
 
   if (_view == View::Conversation) {
-    if (_recording) {
+    if (_voiceChatActive) {
+      if (bootPressed) {
+        backToThreads();
+      }
+    } else if (_recording) {
       if (bootPressed) {
         cancelRecording();
       } else if (powerPressed && !_powerTalkCandidate) {
@@ -368,7 +410,7 @@ void RemoteApp::handleButtons() {
       _powerTalkCandidate = false;
       if (bootPressed) {
         backToThreads();
-      } else if (powerPressed && !_awaitingResponse) {
+      } else if (powerPressed && (!_awaitingResponse || _playbackActive)) {
         startRecording();
         if (_recording) {
           _powerTalkCandidate = true;
@@ -382,7 +424,7 @@ void RemoteApp::handleButtons() {
     }
     if (powerPressed) {
       if (_client.connected()) {
-        createThread();
+        openVoiceChat();
       } else {
         showAgents();
       }
@@ -490,7 +532,7 @@ void RemoteApp::handleTap(int x, int y) {
         x < kNewThreadCardX + kNewThreadCardWidth &&
         y >= kNewThreadCardY &&
         y < kNewThreadCardY + kNewThreadCardHeight) {
-      createThread();
+      openVoiceChat();
       return;
     }
     if (x < kThreadCardX || x >= kThreadCardX + kThreadCardWidth ||
@@ -626,6 +668,9 @@ void RemoteApp::openThread(int index) {
   }
   const RemoteThread &thread = _client.thread(index);
   _startRecordingWhenThreadReady = false;
+  _voiceChatActive = false;
+  _voiceChatSessionActive = false;
+  _voiceChatReconnectPending = false;
   _client.clearActiveThread();
   if (!_client.openThread(thread.id)) {
     return;
@@ -637,10 +682,14 @@ void RemoteApp::openThread(int index) {
   _dirty = true;
 }
 
-void RemoteApp::createThread() {
+void RemoteApp::openVoiceChat() {
   _client.clearActiveThread();
+  _voiceChatActive = true;
+  _voiceChatSessionActive = false;
+  _voiceChatReconnectPending = false;
   _startRecordingWhenThreadReady = true;
-  if (!_client.createThread()) {
+  if (!_client.openVoiceChat()) {
+    _voiceChatActive = false;
     _startRecordingWhenThreadReady = false;
     return;
   }
@@ -653,11 +702,23 @@ void RemoteApp::createThread() {
 
 void RemoteApp::backToThreads() {
   _startRecordingWhenThreadReady = false;
+  _voiceChatReconnectPending = false;
+  if (_voiceChatSessionActive) {
+    _voiceChatSessionActive = false;
+    if (_recording) {
+      _recording = false;
+      _audio.stopRecording();
+      Board::setPowerButtonShutdownEnabled(true);
+    }
+    _client.cancelAudio();
+  }
+  _voiceChatActive = false;
   _audio.stopPlayback();
   _playbackActive = false;
   _ignoreRemoteAudio = true;
   _view = View::Threads;
   _awaitingResponse = false;
+  _responseHadRemoteAudio = false;
   if (!_client.closeThread()) {
     _client.listThreads();
   }
@@ -768,7 +829,8 @@ void RemoteApp::noteActivity() {
 }
 
 bool RemoteApp::autoSleepBlocked() const {
-  return _recording || _playbackActive || _awaitingResponse ||
+  return _voiceChatSessionActive || _recording || _playbackActive ||
+         _awaitingResponse ||
          _client.pairingPending() || _client.activeThreadBusy();
 }
 
@@ -839,17 +901,48 @@ void RemoteApp::startRecording() {
   if (!_client.connected() || _client.activeThreadId().isEmpty()) {
     return;
   }
+  if (_playbackActive && _awaitingResponse) {
+    _client.interrupt(_client.activeThreadId());
+    _awaitingResponse = false;
+  }
   _audio.stopPlayback();
   _playbackActive = false;
-  _ignoreRemoteAudio = true;
+  _responseHadRemoteAudio = false;
+  _ignoreRemoteAudio = !_voiceChatActive;
   if (!_audio.startRecording()) {
     return;
   }
-  if (!_client.startAudio(_client.activeThreadId())) {
+  if (!_client.startAudio(_client.activeThreadId(), _voiceChatActive)) {
     _audio.stopRecording();
     return;
   }
   Board::setPowerButtonShutdownEnabled(false);
+  _recording = true;
+  _voiceChatSessionActive = _voiceChatActive;
+  _dirty = true;
+}
+
+void RemoteApp::pauseVoiceChatCapture() {
+  if (!_voiceChatSessionActive || !_recording) {
+    return;
+  }
+  _recording = false;
+  _audio.stopRecording();
+  Board::setPowerButtonShutdownEnabled(true);
+  _dirty = true;
+}
+
+void RemoteApp::resumeVoiceChatCapture() {
+  if (!_voiceChatSessionActive || _recording || _playbackActive ||
+      !_client.connected()) {
+    return;
+  }
+  _audio.stopPlayback();
+  if (!_audio.startRecording()) {
+    return;
+  }
+  Board::setPowerButtonShutdownEnabled(false);
+  _ignoreRemoteAudio = false;
   _recording = true;
   _dirty = true;
 }
@@ -875,6 +968,7 @@ void RemoteApp::cancelRecording() {
   _audio.stopRecording();
   _client.cancelAudio();
   _awaitingResponse = false;
+  _responseHadRemoteAudio = false;
   _dirty = true;
 }
 
@@ -918,7 +1012,11 @@ void RemoteApp::updateReaderSelection() {
         _readerMessageId = message.id;
         _readerPage = 0;
         _awaitingResponse = false;
-        if (_autoReadReplies && !_client.activeThreadId().isEmpty()) {
+        const bool shouldAutoRead =
+            _autoReadReplies && !_responseHadRemoteAudio &&
+            !_client.activeThreadId().isEmpty();
+        _responseHadRemoteAudio = false;
+        if (shouldAutoRead) {
           _ignoreRemoteAudio = false;
           _client.speakMessage(_client.activeThreadId(), message.id);
         }
@@ -1023,9 +1121,11 @@ void RemoteApp::handleSerialDebug() {
     } else if (_serialCommand == "$PAGE_FORWARD") {
       pageForward();
     } else if (_serialCommand == "$PWR" && _view == View::Conversation) {
-      if (_recording) {
+      if (_voiceChatActive) {
+        // Voice Chat stays live until BOOT ends the session.
+      } else if (_recording) {
         stopRecording();
-      } else if (!_awaitingResponse) {
+      } else if (!_awaitingResponse || _playbackActive) {
         startRecording();
       }
     } else if (_serialCommand.startsWith("$TAP ")) {
@@ -1137,7 +1237,7 @@ void RemoteApp::drawThreads() {
   display.setTextSize(1);
   display.setTextColor(kWhite);
   display.setCursor(78, kNewThreadCardY + 30);
-  display.print("NEW THREAD");
+  display.print("VOICE CHAT");
   display.setFont();
   display.setTextSize(2);
   display.setTextColor(kMint);
@@ -1349,11 +1449,25 @@ void RemoteApp::drawConversation() {
     drawOrb(display, SCREEN_WIDTH_PX / 2, 185, 48, true);
     drawWaveform(display, 306, true);
     drawCenteredText(display, "LISTENING...", 342, 3, kMint);
-    drawCenteredText(display,
-                     _powerTalkCandidate ? "RELEASE TO SEND"
-                                         : "TAP PWR TO SEND",
-                     375, 2, kWhite);
-    drawFooter(_powerTalkCandidate ? "PUSH TO TALK" : "RECORDING");
+    if (_voiceChatActive) {
+      drawCenteredText(display, "SPEAK NATURALLY", 375, 2, kWhite);
+      drawFooter("BOOT END VOICE CHAT");
+    } else {
+      drawCenteredText(display,
+                       _powerTalkCandidate ? "RELEASE TO SEND"
+                                           : "TAP PWR TO SEND",
+                       375, 2, kWhite);
+      drawFooter(_powerTalkCandidate ? "PUSH TO TALK" : "RECORDING");
+    }
+    return;
+  }
+
+  if (_voiceChatSessionActive) {
+    drawOrb(display, SCREEN_WIDTH_PX / 2, 185, 48, true);
+    drawWaveform(display, 306, true);
+    drawCenteredText(display, "CODEX IS SPEAKING", 342, 3, kMint);
+    drawCenteredText(display, "VOICE CHAT IS LIVE", 375, 2, kWhite);
+    drawFooter("BOOT END VOICE CHAT");
     return;
   }
 
@@ -1420,10 +1534,16 @@ void RemoteApp::drawConversation() {
                       kMessageCharactersPerLine, kMessageLinesPerPage,
                       user ? kCyan : kWhite);
   if (!user) {
-    drawFooter(_playbackActive ? "TAP STOP  PWR TALK"
-                               : "TAP READ  PWR TALK");
+    if (_voiceChatActive) {
+      drawFooter(_playbackActive ? "CODEX SPEAKING  BOOT END"
+                                 : "VOICE CHAT  BOOT END");
+    } else {
+      drawFooter(_playbackActive ? "TAP STOP  PWR TALK"
+                                 : "TAP READ  PWR TALK");
+    }
   } else {
-    drawFooter("PWR TALK  BOOT BACK");
+    drawFooter(_voiceChatActive ? "VOICE CHAT  BOOT END"
+                                : "PWR TALK  BOOT BACK");
   }
 }
 

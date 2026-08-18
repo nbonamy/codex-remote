@@ -18,10 +18,6 @@ import {
   type RemoteServerInfo,
 } from '../src/server/remote-server';
 import { PairingStore } from '../src/server/pairing-store';
-import type {
-  RemoteRealtimeBridge,
-  RemoteRealtimePeer,
-} from '../src/server/realtime-media';
 
 const servers: CodexRemoteServer[] = [];
 const sockets: WebSocket[] = [];
@@ -195,7 +191,6 @@ describe('CodexRemoteServer realtime voice', () => {
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
-      realtimeVoiceAvailable: () => false,
       transcribeAudio,
     });
     servers.push(server);
@@ -212,6 +207,7 @@ describe('CodexRemoteServer realtime voice', () => {
       type: 'audio_start',
       threadId: 'thread-1',
       sampleRate: 24_000,
+      realtime: true,
     }));
     expect(await messages.nextJson('status')).toMatchObject({ status: 'recording' });
     socket.send(Buffer.alloc(4_800, 1));
@@ -222,7 +218,7 @@ describe('CodexRemoteServer realtime voice', () => {
     expect(conversation.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('streams realtime voice directly over the app-server WebSocket without a renderer', async () => {
+  it('streams and reuses realtime voice directly over the app-server WebSocket', async () => {
     const realtime = new FakeRealtimeSession('thread-1');
     const conversation = fakeConversation(realtime);
     const startRealtime = vi.spyOn(conversation, 'startRealtime');
@@ -232,6 +228,8 @@ describe('CodexRemoteServer realtime voice', () => {
       simulatorHtml: '<!doctype html><title>sim</title>',
       port: 0,
       advertise: false,
+      realtimeInstructions: 'Speak only the final answer.',
+      realtimeVoice: 'marin',
     });
     servers.push(server);
     const info = await server.start();
@@ -247,6 +245,7 @@ describe('CodexRemoteServer realtime voice', () => {
       type: 'audio_start',
       threadId: 'thread-1',
       sampleRate: 24_000,
+      realtime: true,
     }));
     socket.send(Buffer.alloc(4_800, 1));
     socket.send(JSON.stringify({ type: 'audio_end' }));
@@ -256,10 +255,13 @@ describe('CodexRemoteServer realtime voice', () => {
     expect(startRealtime).toHaveBeenCalledWith({
       outputModality: 'audio',
       version: 'v2',
+      voice: 'marin',
+      prompt: 'Speak only the final answer.',
       includeStartupContext: true,
       flushTranscriptTailOnSessionEnd: true,
       transport: { type: 'websocket' },
     });
+    expect(realtime.appendText).not.toHaveBeenCalled();
     expect(realtime.appendAudio.mock.calls[0]?.[0]).toMatchObject({
       sampleRate: 24_000,
       numChannels: 1,
@@ -280,74 +282,27 @@ describe('CodexRemoteServer realtime voice', () => {
         itemId: 'assistant-audio-1',
       },
     }));
-    expect(await messages.nextBinary()).toStrictEqual(Buffer.from([1, 2, 3, 4]));
-  });
-
-  it('bridges device PCM through WebRTC and streams transcript and audio back', async () => {
-    const realtime = new FakeRealtimeSession(
-      'thread-1',
-      'webrtc',
-      'v=0\r\no=answer\r\n',
-    );
-    const media = new FakeRealtimeBridge();
-    const conversation = fakeConversation(realtime);
-    const startRealtime = vi.spyOn(conversation, 'startRealtime');
-    const surface = fakeSurface(conversation);
-    const server = new CodexRemoteServer({
-      surface,
-      token: 'test-device-token',
-      simulatorHtml: '<!doctype html><title>sim</title>',
-      port: 0,
-      advertise: false,
-      realtimeBridge: media,
+    let speakingStatus: Record<string, unknown>;
+    do {
+      speakingStatus = await messages.nextJson('status');
+    } while (speakingStatus.status !== 'speaking');
+    expect(speakingStatus).toMatchObject({
+      detail: 'Codex is replying',
     });
-    servers.push(server);
-    const info = await server.start();
-    const socket = new WebSocket(
-      `ws://127.0.0.1:${info.port}/api/v1/agents/codex/device?token=test-device-token`,
-    );
-    sockets.push(socket);
-    const messages = new SocketMessages(socket);
+    expect(await messages.nextBinary()).toStrictEqual(Buffer.from([1, 2, 3, 4]));
 
-    await messages.nextJson('hello');
-    await messages.nextJson('threads');
     socket.send(JSON.stringify({
       type: 'audio_start',
       threadId: 'thread-1',
       sampleRate: 24_000,
+      realtime: true,
     }));
-    socket.send(Buffer.alloc(4_800, 1));
+    socket.send(Buffer.alloc(4_800, 2));
     socket.send(JSON.stringify({ type: 'audio_end' }));
-    await messages.nextJson('status');
 
-    await vi.waitFor(() => expect(media.peer.appendAudio).toHaveBeenCalledTimes(2));
-    expect(startRealtime).toHaveBeenCalledWith({
-      outputModality: 'audio',
-      version: 'v1',
-      includeStartupContext: true,
-      flushTranscriptTailOnSessionEnd: true,
-      transport: {
-        type: 'webrtc',
-        sdp: 'v=0\r\no=offer\r\n',
-      },
-    });
-    expect(media.peer.applyAnswer).toHaveBeenCalledWith('v=0\r\no=answer\r\n');
-    expect(media.peer.appendAudio.mock.calls[0]?.[0]).toHaveLength(4_800);
-    expect(media.peer.appendAudio.mock.calls[0]?.[1]).toBe(24_000);
-    expect(media.peer.appendAudio.mock.calls[1]?.[0]).toHaveLength(33_600);
-    expect(media.peer.appendAudio.mock.calls[1]?.[1]).toBe(24_000);
-
-    realtime.emit(realtimeEvent('realtime.transcriptCompleted', {
-      role: 'user',
-      text: 'run the focused tests',
-    }));
-    expect(await messages.nextJson('transcript')).toMatchObject({
-      role: 'user',
-      text: 'run the focused tests',
-    });
-
-    media.emitAudio(new Uint8Array([1, 2, 3, 4]));
-    expect(await messages.nextBinary()).toStrictEqual(Buffer.from([1, 2, 3, 4]));
+    await vi.waitFor(() => expect(realtime.appendAudio).toHaveBeenCalledTimes(4));
+    expect(startRealtime).toHaveBeenCalledOnce();
+    expect(realtime.appendText).not.toHaveBeenCalled();
   });
 
   it('rejects unauthorized device websocket upgrades', async () => {
@@ -371,7 +326,7 @@ describe('CodexRemoteServer realtime voice', () => {
     })).rejects.toThrow('Unexpected server response: 401');
   });
 
-  it('falls back to local transcription when Codex realtime is not entitled', async () => {
+  it('does not fall back to local transcription when realtime voice fails', async () => {
     const realtime = new FakeRealtimeSession('thread-1');
     const conversation = fakeConversation(realtime);
     vi.mocked(conversation.startRealtime).mockRejectedValueOnce(
@@ -384,7 +339,6 @@ describe('CodexRemoteServer realtime voice', () => {
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
-      realtimeBridge: new FakeRealtimeBridge(),
       transcribeAudio,
     });
     servers.push(server);
@@ -401,24 +355,17 @@ describe('CodexRemoteServer realtime voice', () => {
       type: 'audio_start',
       threadId: 'thread-1',
       sampleRate: 24_000,
+      realtime: true,
     }));
-    socket.send(Buffer.alloc(4_800, 1));
-    socket.send(JSON.stringify({ type: 'audio_end' }));
 
-    await vi.waitFor(() => expect(transcribeAudio).toHaveBeenCalledTimes(1));
-    expect(await messages.nextJson('transcript')).toMatchObject({
-      role: 'user',
-      text: 'run the focused tests',
+    expect(await messages.nextJson('error')).toMatchObject({
+      message: 'Voice session access denied',
     });
-    expect(transcribeAudio).toHaveBeenCalledTimes(1);
-    const wave = transcribeAudio.mock.calls[0]?.[0];
-    expect(wave?.subarray(0, 4).toString('ascii')).toBe('RIFF');
-    expect(wave?.subarray(8, 12).toString('ascii')).toBe('WAVE');
-    expect(wave).toHaveLength(4_844);
-    expect(conversation.sendMessage).toHaveBeenCalledWith('run the focused tests');
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(conversation.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('uses local transcription directly when realtime API key auth is unavailable', async () => {
+  it('uses local transcription for a regular Codex thread even when realtime is available', async () => {
     const realtime = new FakeRealtimeSession('thread-1');
     const conversation = fakeConversation(realtime);
     const transcribeAudio = vi.fn(async (_wave: Buffer) => ({ text: 'show the latest diff' }));
@@ -428,12 +375,11 @@ describe('CodexRemoteServer realtime voice', () => {
       simulatorHtml: '<!doctype html>',
       port: 0,
       advertise: false,
-      realtimeVoiceAvailable: () => false,
       transcribeAudio,
     });
     servers.push(server);
     const info = await server.start();
-    expect(info.realtimeVoiceAvailable).toBe(false);
+    expect(info.realtimeVoiceAvailable).toBe(true);
     const socket = new WebSocket(
       `ws://127.0.0.1:${info.port}/api/v1/agents/codex/device?token=test-device-token`,
     );
@@ -459,6 +405,57 @@ describe('CodexRemoteServer realtime voice', () => {
     expect(conversation.startRealtime).not.toHaveBeenCalled();
     expect(transcribeAudio).toHaveBeenCalledTimes(1);
     expect(conversation.sendMessage).toHaveBeenCalledWith('show the latest diff');
+  });
+
+  it.each([
+    'thread not found: deleted-voice-chat',
+    'thread-store conflict: thread deleted-voice-chat already has an active writer',
+  ])('reopens a saved voice chat and recreates it when unavailable: %s', async (loadError) => {
+    const conversation = fakeConversation(new FakeRealtimeSession('thread-1'));
+    vi.mocked(conversation.load).mockRejectedValueOnce(
+      new Error(loadError),
+    );
+    const surface = fakeSurface(conversation);
+    const server = new CodexRemoteServer({
+      surface,
+      token: 'test-device-token',
+      simulatorHtml: '<!doctype html>',
+      port: 0,
+      advertise: false,
+    });
+    servers.push(server);
+    const info = await server.start();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${info.port}/api/v1/agents/codex/device?token=test-device-token`,
+    );
+    sockets.push(socket);
+    const messages = new SocketMessages(socket);
+
+    await messages.nextJson('hello');
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({
+      type: 'open_voice_chat',
+      threadId: 'deleted-voice-chat',
+    }));
+
+    await expect(messages.nextJson('thread')).resolves.toMatchObject({
+      thread: { id: 'thread-1' },
+    });
+    expect(surface.forgetConversation).toHaveBeenCalledWith('deleted-voice-chat');
+    expect(surface.createConversation).toHaveBeenCalledOnce();
+    expect(conversation.rename).toHaveBeenCalledWith('Codex Remote Voice Chat');
+
+    socket.send(JSON.stringify({ type: 'close_thread' }));
+    await messages.nextJson('threads');
+    socket.send(JSON.stringify({
+      type: 'open_voice_chat',
+      threadId: 'thread-1',
+    }));
+
+    await expect(messages.nextJson('thread')).resolves.toMatchObject({
+      thread: { id: 'thread-1' },
+    });
+    expect(surface.createConversation).toHaveBeenCalledOnce();
   });
 });
 
@@ -1001,27 +998,6 @@ class FakeRealtimeSession implements CodexRealtimeSession {
   }
 }
 
-class FakeRealtimePeer implements RemoteRealtimePeer {
-  readonly offerSdp = 'v=0\r\no=offer\r\n';
-  readonly applyAnswer = vi.fn<RemoteRealtimePeer['applyAnswer']>(async () => undefined);
-  readonly appendAudio = vi.fn<RemoteRealtimePeer['appendAudio']>(async () => undefined);
-  readonly close = vi.fn<RemoteRealtimePeer['close']>(async () => undefined);
-}
-
-class FakeRealtimeBridge implements RemoteRealtimeBridge {
-  readonly peer = new FakeRealtimePeer();
-  private onAudio: ((data: Uint8Array) => void) | null = null;
-
-  readonly createPeer = vi.fn<RemoteRealtimeBridge['createPeer']>(async (onAudio) => {
-    this.onAudio = onAudio;
-    return this.peer;
-  });
-
-  emitAudio(data: Uint8Array): void {
-    this.onAudio?.(data);
-  }
-}
-
 class SocketMessages {
   private readonly queued: Array<{ data: Buffer; binary: boolean }> = [];
   private readonly waiting: Array<(message: { data: Buffer; binary: boolean }) => void> = [];
@@ -1101,6 +1077,7 @@ function fakeConversation(realtime: CodexRealtimeSession): CodexConversation {
     retryMessage: vi.fn(async () => snapshot),
     rollbackToTurn: vi.fn(async () => snapshot),
     deleteQueuedPrompt: vi.fn(async () => snapshot),
+    updateQueuedPrompt: vi.fn(async () => snapshot),
     steerQueuedPrompt: vi.fn(async () => snapshot),
     respondToClientRequest: vi.fn(async () => snapshot),
     resolveApproval: vi.fn(async () => snapshot),

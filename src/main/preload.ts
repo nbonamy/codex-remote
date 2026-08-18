@@ -2,7 +2,6 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   CodexRemoteDesktopApi,
   CodexRemoteDesktopState,
-  RealtimeRendererCommand,
 } from './contracts';
 
 const api: CodexRemoteDesktopApi = {
@@ -15,16 +14,6 @@ const api: CodexRemoteDesktopApi = {
     };
     ipcRenderer.on('codex-remote:state', handler);
     return () => ipcRenderer.off('codex-remote:state', handler);
-  },
-  sendRealtimeEvent: (event) => {
-    ipcRenderer.send('codex-remote:realtime-event', event);
-  },
-  onRealtimeCommand: (listener) => {
-    const handler = (_event: Electron.IpcRendererEvent, command: RealtimeRendererCommand) => {
-      listener(command);
-    };
-    ipcRenderer.on('codex-remote:realtime-command', handler);
-    return () => ipcRenderer.off('codex-remote:realtime-command', handler);
   },
 };
 

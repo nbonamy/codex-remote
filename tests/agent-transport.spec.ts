@@ -29,7 +29,12 @@ describe('createAgentTransport', () => {
     const transport = await createAgentTransport(profile!, {
       createUnixSocketTransport: () => socket,
       createStdioTransport: (options) => {
-        expect(options).toEqual({ codexHome: '/Users/tester/.codex' });
+        expect(options).toEqual({
+          codexHome: '/Users/tester/.codex',
+          configOverrides: [
+            'features.realtime_conversation=true',
+          ],
+        });
         return stdio;
       },
       onSocketFallback,
@@ -50,6 +55,9 @@ describe('createAgentTransport', () => {
       createStdioTransport: (options) => {
         expect(options).toEqual({
           codexHome: '/Users/tester/.codex-claw/codex-home',
+          configOverrides: [
+            'features.realtime_conversation=true',
+          ],
         });
         return stdio;
       },

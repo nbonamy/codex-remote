@@ -563,6 +563,8 @@ void RemoteClient::loadPairings() {
   }
   _selectedAgentKey = preferences.getString("selected", "");
   const String serialized = preferences.getString("pairings", "[]");
+  const String serializedVoiceChats =
+      preferences.getString("voice_chats", "[]");
   preferences.end();
 
   JsonDocument document;
@@ -583,6 +585,25 @@ void RemoteClient::loadPairings() {
     pairing.id = id;
     pairing.name = String(item["name"] | "Codex Remote");
     pairing.token = token;
+  }
+
+  document.clear();
+  if (deserializeJson(document, serializedVoiceChats)) {
+    return;
+  }
+  _voiceChatCount = 0;
+  for (JsonObjectConst item : document.as<JsonArrayConst>()) {
+    if (_voiceChatCount >= kMaxAgents) {
+      break;
+    }
+    const String agentKey = item["agent"] | "";
+    const String threadId = item["thread"] | "";
+    if (agentKey.isEmpty() || threadId.isEmpty()) {
+      continue;
+    }
+    StoredVoiceChat &voiceChat = _voiceChats[_voiceChatCount++];
+    voiceChat.agentKey = agentKey;
+    voiceChat.threadId = threadId;
   }
 }
 
@@ -664,13 +685,78 @@ void RemoteClient::saveSelectedAgent() {
   }
 }
 
+String RemoteClient::voiceChatThreadId() const {
+  for (int index = 0; index < _voiceChatCount; index++) {
+    if (_voiceChats[index].agentKey == _selectedAgentKey) {
+      return _voiceChats[index].threadId;
+    }
+  }
+  return "";
+}
+
+void RemoteClient::saveVoiceChatThreadId(const String &threadId) {
+  if (_selectedAgentKey.isEmpty() || threadId.isEmpty()) {
+    return;
+  }
+  int target = -1;
+  for (int index = 0; index < _voiceChatCount; index++) {
+    if (_voiceChats[index].agentKey == _selectedAgentKey) {
+      target = index;
+      break;
+    }
+  }
+  if (target < 0 && _voiceChatCount < kMaxAgents) {
+    target = _voiceChatCount++;
+  }
+  if (target < 0) {
+    return;
+  }
+  _voiceChats[target].agentKey = _selectedAgentKey;
+  _voiceChats[target].threadId = threadId;
+  persistVoiceChats();
+}
+
+void RemoteClient::persistVoiceChats() {
+  JsonDocument document;
+  JsonArray voiceChats = document.to<JsonArray>();
+  for (int index = 0; index < _voiceChatCount; index++) {
+    JsonObject voiceChat = voiceChats.add<JsonObject>();
+    voiceChat["agent"] = _voiceChats[index].agentKey;
+    voiceChat["thread"] = _voiceChats[index].threadId;
+  }
+  String serialized;
+  serializeJson(document, serialized);
+  Preferences preferences;
+  if (preferences.begin("codexremote", false)) {
+    preferences.putString("voice_chats", serialized);
+    preferences.end();
+  }
+}
+
 bool RemoteClient::createThread() {
+  _openingVoiceChat = false;
   JsonDocument document;
   document["type"] = "create_thread";
   return sendControl(document);
 }
 
+bool RemoteClient::openVoiceChat() {
+  _openingVoiceChat = true;
+  JsonDocument document;
+  document["type"] = "open_voice_chat";
+  const String threadId = voiceChatThreadId();
+  if (!threadId.isEmpty()) {
+    document["threadId"] = threadId;
+  }
+  if (sendControl(document)) {
+    return true;
+  }
+  _openingVoiceChat = false;
+  return false;
+}
+
 bool RemoteClient::openThread(const String &threadId) {
+  _openingVoiceChat = false;
   JsonDocument document;
   document["type"] = "open_thread";
   document["threadId"] = threadId;
@@ -690,11 +776,12 @@ bool RemoteClient::listThreads() {
   return sendControl(document);
 }
 
-bool RemoteClient::startAudio(const String &threadId) {
+bool RemoteClient::startAudio(const String &threadId, bool realtime) {
   JsonDocument document;
   document["type"] = "audio_start";
   document["threadId"] = threadId;
   document["sampleRate"] = MIC_SAMPLE_RATE;
+  document["realtime"] = realtime;
   return sendControl(document);
 }
 
@@ -732,6 +819,7 @@ bool RemoteClient::speakMessage(const String &threadId,
 }
 
 void RemoteClient::clearActiveThread() {
+  _openingVoiceChat = false;
   _activeThreadId = "";
   _activeThreadTitle = "";
   _activeThreadBusy = false;
@@ -780,6 +868,21 @@ void RemoteClient::handleMessage(WebsocketsMessage message) {
     parseThreads(document["threads"].as<JsonArrayConst>());
   } else if (type == "thread") {
     parseThread(document["thread"].as<JsonObjectConst>());
+    if (_openingVoiceChat && !_activeThreadId.isEmpty()) {
+      saveVoiceChatThreadId(_activeThreadId);
+      int writeIndex = 0;
+      for (int readIndex = 0; readIndex < _threadCount; readIndex++) {
+        if (_threads[readIndex].id == _activeThreadId) {
+          continue;
+        }
+        if (writeIndex != readIndex) {
+          _threads[writeIndex] = _threads[readIndex];
+        }
+        writeIndex++;
+      }
+      _threadCount = writeIndex;
+      _openingVoiceChat = false;
+    }
   } else if (type == "status") {
     _status = String(document["status"] | "ready");
     _error = "";
@@ -789,6 +892,7 @@ void RemoteClient::handleMessage(WebsocketsMessage message) {
     _status = role == "user" ? "Heard: " + text : "Codex: " + text;
     _error = "";
   } else if (type == "error") {
+    _openingVoiceChat = false;
     _error = String(document["message"] | "Remote error");
     _status = "Error";
   }
@@ -804,6 +908,7 @@ void RemoteClient::handleEvent(WebsocketsEvent event, const String &data) {
     listThreads();
   } else if (event == WebsocketsEvent::ConnectionClosed) {
     _connected = false;
+    _openingVoiceChat = false;
     if (_ws && _ws->getCloseReason() == CloseReason_PolicyViolation) {
       const String revokedHostId = _selectedHostId;
       clearRevokedPairing(revokedHostId);
@@ -816,12 +921,17 @@ void RemoteClient::handleEvent(WebsocketsEvent event, const String &data) {
 
 void RemoteClient::parseThreads(JsonArrayConst threads) {
   _threadCount = 0;
+  const String voiceChatId = voiceChatThreadId();
   for (JsonObjectConst item : threads) {
     if (_threadCount >= kMaxThreads) {
       break;
     }
+    const String threadId = item["id"] | "";
+    if (!voiceChatId.isEmpty() && threadId == voiceChatId) {
+      continue;
+    }
     RemoteThread &target = _threads[_threadCount++];
-    target.id = String(item["id"] | "");
+    target.id = threadId;
     target.title = String(item["title"] | "Untitled");
     target.preview = String(item["preview"] | "");
     target.status = String(item["status"] | "");

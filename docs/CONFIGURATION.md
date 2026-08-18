@@ -16,6 +16,7 @@ OPENAI_API_KEY=
 CODEX_REMOTE_TTS_MODEL=gpt-4o-mini-tts
 CODEX_REMOTE_TTS_VOICE=marin
 CODEX_REMOTE_TTS_INSTRUCTIONS=Speak naturally in English with a warm, conversational tone, clear pacing, and subtle expression.
+CODEX_REMOTE_REALTIME_VOICE=
 ```
 
 ### Development location
@@ -50,11 +51,27 @@ Restart Codex Remote after editing environment configuration.
 Both `.env.local` locations are ignored by Git. Never commit, paste into an
 issue, or copy an API key into `credentials.h`.
 
-## OpenAI key behavior
+## Voice paths and OpenAI key behavior
 
 `OPENAI_API_KEY` is optional on macOS.
 
-### Without a key
+### Dedicated Voice Chat
+
+Voice Chat always uses the authenticated Codex app-server realtime session:
+
+- Device microphone PCM streams through the authenticated LAN WebSocket to the
+  host and then to app-server realtime.
+- App-server emits live user and assistant transcription events for display.
+- App-server emits assistant PCM audio deltas, which the host forwards directly
+  to the device speaker.
+- The realtime session is reused while Voice Chat remains open and receives the
+  device-specific concise-answer instructions at startup.
+
+This path does not call the legacy Apple transcription, ordinary text prompt,
+OpenAI TTS, or Apple speech code. A realtime startup failure is shown as an
+error; it does not silently change the interaction model.
+
+### Existing Codex threads without a key
 
 - Device microphone PCM is sent over the authenticated local WebSocket.
 - The Mac transcribes it with the Apple SpeechAnalyzer helper from
@@ -64,16 +81,14 @@ issue, or copy an API key into `credentials.h`.
 - Assistant read-aloud uses `/usr/bin/say` with the Samantha voice, converts the
   result to mono PCM16LE at 24 kHz, and streams it to the device.
 
-This is the tested fallback path. The unit test in
+This is the tested legacy thread path. The unit test in
 `tests/openai-speech.spec.ts` verifies that a keyless macOS host selects Apple
 speech.
 
-### With a key
+### Existing Codex threads with a key
 
-- New recordings first attempt Codex realtime voice when the connected agent
-  supports it.
-- If realtime startup fails on macOS, the host falls back to local Apple
-  transcription.
+- Recordings continue to use local Apple transcription and an ordinary Codex
+  text prompt.
 - Assistant read-aloud calls the OpenAI speech endpoint with
   `gpt-4o-mini-tts` and the `marin` voice by default.
 - If that OpenAI request fails before audio streaming starts, the host logs the
@@ -86,13 +101,14 @@ over mDNS, included in pairing data, or sent to the ESP32.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | unset | Enables OpenAI-backed voice paths. |
+| `OPENAI_API_KEY` | unset | Enables OpenAI TTS for existing-thread read-aloud. |
 | `CODEX_REMOTE_TTS_MODEL` | `gpt-4o-mini-tts` | OpenAI speech model. |
 | `CODEX_REMOTE_TTS_VOICE` | `marin` | OpenAI speech voice. |
 | `CODEX_REMOTE_TTS_INSTRUCTIONS` | English conversational prompt | Speaking style and delivery. |
+| `CODEX_REMOTE_REALTIME_VOICE` | app-server default | Voice used by the realtime conversation. |
 
-These overrides affect OpenAI speech only. The Apple fallback currently uses
-the Samantha voice.
+The TTS overrides affect OpenAI read-aloud. The realtime voice override affects
+live conversations. The Apple fallback currently uses the Samantha voice.
 
 ## Other host variables
 

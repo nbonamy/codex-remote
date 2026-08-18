@@ -33,10 +33,6 @@ import {
   toDeviceThreadState,
   type DeviceServerMessage,
 } from './protocol';
-import type {
-  RemoteRealtimeBridge,
-  RemoteRealtimePeer,
-} from './realtime-media';
 import { PairingError, type PairingStore } from './pairing-store';
 import { pcm16LeToWave } from './wav';
 
@@ -66,6 +62,8 @@ const DEVICE_CONVERSATION_OPTIONS = {
   serviceTier: 'priority',
 } as const;
 
+const VOICE_CHAT_TITLE = 'Codex Remote Voice Chat';
+
 export type RemoteServerOptions = {
   agents?: RemoteCodexAgent[];
   surface?: CodexSurface;
@@ -76,7 +74,8 @@ export type RemoteServerOptions = {
   listenAddress?: string;
   port?: number;
   advertise?: boolean;
-  realtimeBridge?: RemoteRealtimeBridge;
+  realtimeInstructions?: string;
+  realtimeVoice?: string;
   realtimeVoiceAvailable?: () => boolean;
   pairing?: PairingStore;
   transcribeAudio?: (wave: Buffer) => Promise<{
@@ -109,8 +108,9 @@ type AudioCapture = {
 type DeviceRealtime = {
   threadId: string;
   handle: CodexRealtimeSession;
-  peer: RemoteRealtimePeer | null;
   unsubscribe: () => void;
+  outputIdleTimer: NodeJS.Timeout | null;
+  speaking: boolean;
 };
 
 type DeviceSession = {
@@ -153,8 +153,6 @@ export class CodexRemoteServer {
   private mdnsService: ReturnType<Bonjour['publish']> | null = null;
   private mdnsProcess: ChildProcess | null = null;
   private info: RemoteServerInfo | null = null;
-  private readonly realtimeStartupErrors = new Map<string, string>();
-
   constructor(private readonly options: RemoteServerOptions) {
     if (!options.token.trim()) throw new Error('A non-empty device token is required');
     this.agents = options.agents ?? (options.surface
@@ -649,6 +647,35 @@ export class CodexRemoteServer {
           this.broadcastThreads(session.agent.id);
           return;
         }
+        case 'open_voice_chat': {
+          await this.releaseActiveThread(session);
+          if (command.threadId) {
+            try {
+              session.threadId = command.threadId;
+              await this.sendThread(session, command.threadId);
+              return;
+            } catch (error) {
+              session.threadId = null;
+              session.agent.surface.forgetConversation(command.threadId);
+              if (!isUnavailableVoiceThreadError(error)) throw error;
+            }
+          }
+          let snapshot = await session.agent.surface.createConversation(
+            DEVICE_CONVERSATION_OPTIONS,
+          );
+          const threadId = snapshot.activeConversationId;
+          if (!threadId) throw new Error('Codex did not return a voice chat thread id');
+          snapshot = await session.agent.surface.conversation(threadId).rename(
+            VOICE_CHAT_TITLE,
+          );
+          session.threadId = threadId;
+          this.send(session, {
+            type: 'thread',
+            thread: toDeviceThreadState(snapshot, threadId),
+          });
+          this.broadcastThreads(session.agent.id);
+          return;
+        }
         case 'open_thread':
           if (session.threadId !== command.threadId) {
             await this.releaseActiveThread(session);
@@ -683,24 +710,11 @@ export class CodexRemoteServer {
           if (session.audio) throw new Error('A recording is already in progress');
           session.threadId = threadId;
           const sampleRate = command.sampleRate ?? REALTIME_SAMPLE_RATE;
-          let realtime: DeviceRealtime | null = null;
-          const realtimeVoiceAvailable = this.isRealtimeVoiceAvailable(session.agent);
-          if (!realtimeVoiceAvailable && session.realtime) {
-            await this.releaseRealtime(session);
-          }
-          const realtimeStartupError = this.realtimeStartupErrors.get(session.agent.id);
-          if (realtimeVoiceAvailable && !realtimeStartupError) {
-            try {
-              realtime = await this.ensureRealtime(session, threadId);
-            } catch (error) {
-              if (!this.options.transcribeAudio) throw error;
-              this.realtimeStartupErrors.set(
-                session.agent.id,
-                error instanceof Error ? error.message : String(error),
-              );
+          if (command.realtime) {
+            if (!this.isRealtimeVoiceAvailable(session.agent)) {
+              throw new Error('Realtime voice is unavailable on this agent');
             }
-          }
-          if (realtime) {
+            const realtime = await this.ensureRealtime(session, threadId);
             session.audio = {
               mode: 'realtime',
               byteLength: 0,
@@ -712,15 +726,9 @@ export class CodexRemoteServer {
             }
             this.send(session, { type: 'status', status: 'recording' });
           } else {
+            if (session.realtime) await this.releaseRealtime(session);
             if (!this.options.transcribeAudio) {
-              throw new Error(
-                this.realtimeStartupErrors.get(session.agent.id)
-                  ?? (
-                    realtimeVoiceAvailable
-                      ? 'Speech transcription is unavailable'
-                      : 'Push-to-talk requires API key authentication or a local transcription backend'
-                  ),
-              );
+              throw new Error('Speech transcription is unavailable');
             }
             session.audio = {
               mode: 'transcription',
@@ -753,7 +761,10 @@ export class CodexRemoteServer {
     const capture = session.audio;
     if (!capture) throw new Error('Audio arrived before audio_start');
     if (chunk.byteLength === 0) return;
-    if (capture.byteLength + chunk.byteLength > MAX_AUDIO_BYTES) {
+    if (
+      capture.mode === 'transcription'
+      && capture.byteLength + chunk.byteLength > MAX_AUDIO_BYTES
+    ) {
       session.audio = null;
       throw new Error('Recording exceeded the 45 second limit');
     }
@@ -765,15 +776,11 @@ export class CodexRemoteServer {
     const realtime = session.realtime;
     if (!realtime) throw new Error('Realtime voice session is not active');
     const bytes = new Uint8Array(chunk);
-    capture.pending = capture.pending.then(() => (
-      realtime.peer
-        ? realtime.peer.appendAudio(bytes, capture.sampleRate)
-        : realtime.handle.appendAudio({
-          data: bytes,
-          sampleRate: capture.sampleRate,
-          numChannels: 1,
-        })
-    ));
+    capture.pending = capture.pending.then(() => realtime.handle.appendAudio({
+      data: bytes,
+      sampleRate: capture.sampleRate,
+      numChannels: 1,
+    }));
     await capture.pending;
   }
 
@@ -817,16 +824,12 @@ export class CodexRemoteServer {
     await capture.pending;
     const silenceSamples = Math.floor(REALTIME_SAMPLE_RATE * 0.7);
     const silence = new Uint8Array(silenceSamples * 2);
-    if (realtime.peer) {
-      await realtime.peer.appendAudio(silence, REALTIME_SAMPLE_RATE);
-    } else {
-      await realtime.handle.appendAudio({
-        data: silence,
-        sampleRate: REALTIME_SAMPLE_RATE,
-        numChannels: 1,
-        samplesPerChannel: silenceSamples,
-      });
-    }
+    await realtime.handle.appendAudio({
+      data: silence,
+      sampleRate: REALTIME_SAMPLE_RATE,
+      numChannels: 1,
+      samplesPerChannel: silenceSamples,
+    });
     this.send(session, {
       type: 'status',
       status: 'sending',
@@ -969,37 +972,25 @@ export class CodexRemoteServer {
     await this.releaseRealtime(session);
     const conversation = session.agent.surface.conversation(threadId);
     await ensureConversationLoaded(conversation);
-    let peer: RemoteRealtimePeer | null = null;
+    let handle: CodexRealtimeSession | null = null;
     try {
-      if (this.options.realtimeBridge) {
-        peer = await this.options.realtimeBridge.createPeer((data) => {
-          if (
-            session.realtime?.peer === peer
-            && !session.closed
-            && session.socket.readyState === WebSocket.OPEN
-          ) {
-            session.socket.send(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
-          }
-        });
-      }
-      const handle = await conversation.startRealtime({
+      const realtimeVoice = this.options.realtimeVoice?.trim();
+      const realtimeInstructions = this.options.realtimeInstructions?.trim();
+      handle = await conversation.startRealtime({
         outputModality: 'audio',
-        version: peer ? 'v1' : 'v2',
+        version: 'v2',
+        ...(realtimeVoice ? { voice: realtimeVoice } : {}),
+        ...(realtimeInstructions ? { prompt: realtimeInstructions } : {}),
         includeStartupContext: true,
         flushTranscriptTailOnSessionEnd: true,
-        ...(peer
-          ? { transport: { type: 'webrtc' as const, sdp: peer.offerSdp } }
-          : { transport: { type: 'websocket' as const } }),
+        transport: { type: 'websocket' },
       });
-      if (peer) {
-        if (!handle.remoteSdp) throw new Error('Codex did not return a WebRTC SDP answer');
-        await peer.applyAnswer(handle.remoteSdp);
-      }
       const realtime: DeviceRealtime = {
         threadId,
         handle,
-        peer,
         unsubscribe: () => undefined,
+        outputIdleTimer: null,
+        speaking: false,
       };
       realtime.unsubscribe = handle.onEvent((event) => {
         this.handleRealtimeEvent(session, realtime, event);
@@ -1007,7 +998,7 @@ export class CodexRemoteServer {
       session.realtime = realtime;
       return realtime;
     } catch (error) {
-      await peer?.close();
+      await handle?.stop().catch(() => undefined);
       throw error;
     }
   }
@@ -1034,11 +1025,18 @@ export class CodexRemoteServer {
           role: event.payload.role,
           text: event.payload.text,
         });
-        if (event.payload.role === 'assistant') {
-          this.send(session, { type: 'status', status: 'ready' });
-        }
+        if (event.payload.role === 'assistant') this.scheduleRealtimeOutputIdle(session, realtime);
         return;
       case 'realtime.audioDelta':
+        if (!realtime.speaking) {
+          realtime.speaking = true;
+          this.send(session, {
+            type: 'status',
+            status: 'speaking',
+            detail: 'Codex is replying',
+          });
+        }
+        this.scheduleRealtimeOutputIdle(session, realtime);
         if (session.socket.readyState === WebSocket.OPEN) {
           session.socket.send(Buffer.from(
             event.payload.audio.data.buffer,
@@ -1051,10 +1049,10 @@ export class CodexRemoteServer {
         this.sendError(session, new Error(event.payload.message));
         return;
       case 'realtime.closed':
+        if (realtime.outputIdleTimer) clearTimeout(realtime.outputIdleTimer);
         realtime.unsubscribe();
         session.realtime = null;
         session.audio = null;
-        void realtime.peer?.close();
         this.send(session, { type: 'status', status: 'ready' });
         return;
       case 'realtime.itemAdded':
@@ -1068,13 +1066,26 @@ export class CodexRemoteServer {
     session.realtime = null;
     session.audio = null;
     if (!realtime) return;
+    if (realtime.outputIdleTimer) clearTimeout(realtime.outputIdleTimer);
     realtime.unsubscribe();
-    await realtime.peer?.close();
     try {
       await realtime.handle.stop();
     } catch {
       // The app-server may already have closed the experimental transport.
     }
+  }
+
+  private scheduleRealtimeOutputIdle(
+    session: DeviceSession,
+    realtime: DeviceRealtime,
+  ): void {
+    if (realtime.outputIdleTimer) clearTimeout(realtime.outputIdleTimer);
+    realtime.outputIdleTimer = setTimeout(() => {
+      realtime.outputIdleTimer = null;
+      if (session.realtime !== realtime || session.closed) return;
+      realtime.speaking = false;
+      this.send(session, { type: 'status', status: 'ready' });
+    }, 600);
   }
 
   private async releaseActiveThread(session: DeviceSession): Promise<void> {
@@ -1382,6 +1393,19 @@ function isUnmaterializedThreadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes('is not materialized yet')
     && message.includes('thread/turns/list');
+}
+
+function isThreadNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().includes('thread not found');
+}
+
+function isUnavailableVoiceThreadError(error: unknown): boolean {
+  if (isThreadNotFoundError(error)) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return normalized.includes('thread-store conflict')
+    && normalized.includes('active writer');
 }
 
 function lanAddresses(): string[] {

@@ -15,6 +15,17 @@ describe('device protocol', () => {
       type: 'audio_start',
       threadId: 'thread-1',
       sampleRate: REALTIME_SAMPLE_RATE,
+      realtime: false,
+    });
+    expect(parseDeviceCommand({
+      type: 'audio_start',
+      threadId: 'voice-chat',
+      realtime: true,
+    })).toStrictEqual({
+      type: 'audio_start',
+      threadId: 'voice-chat',
+      sampleRate: REALTIME_SAMPLE_RATE,
+      realtime: true,
     });
     expect(() => parseDeviceCommand({
       type: 'audio_start',
@@ -28,6 +39,13 @@ describe('device protocol', () => {
     });
     expect(parseDeviceCommand({ type: 'audio_cancel' })).toStrictEqual({
       type: 'audio_cancel',
+    });
+    expect(parseDeviceCommand({
+      type: 'open_voice_chat',
+      threadId: 'voice-chat',
+    })).toStrictEqual({
+      type: 'open_voice_chat',
+      threadId: 'voice-chat',
     });
     expect(parseDeviceCommand({
       type: 'speak_message',

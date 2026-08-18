@@ -110,12 +110,14 @@ not require erasing the device first.
 
 ## Push-to-talk records but no prompt appears
 
-On macOS without an API key, approve any requested Speech Recognition
-permission and check the host logs for Apple SpeechAnalyzer errors.
+In the dedicated Voice Chat, transcription and reply audio both come from the
+app-server realtime session. Check app-server realtime errors; this mode never
+falls back to the legacy transcription/TTS pipeline.
 
-With `OPENAI_API_KEY`, the host first tries realtime voice and falls back to
-Apple transcription when realtime startup fails. Restart the host after
-changing `.env.local`.
+In an existing Codex thread, approve any requested Speech Recognition
+permission and check the host logs for Apple SpeechAnalyzer errors. These
+threads always use the transcription/text-prompt/TTS path. Restart the host
+after changing `.env.local`.
 
 Record for longer than a quick click and less than 45 seconds. BOOT cancels an
 active recording.

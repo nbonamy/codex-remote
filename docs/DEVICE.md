@@ -47,8 +47,10 @@ The list displays five large conversation titles at a time.
 - Tap a title to open it.
 - Swipe up to advance by four conversations.
 - Swipe down to go back by four conversations.
-- Tap **Create** at the bottom or press PWR to create a new conversation. The
-  device starts listening as soon as the host returns the new thread.
+- Tap **Voice Chat** at the bottom or press PWR to open the dedicated voice
+  conversation. The first use creates it; later uses reopen its saved thread
+  and start listening immediately. Its ID is stored per host/agent and the
+  dedicated thread is omitted from the regular conversation list.
 - Press BOOT to return to agent selection.
 
 The ESP32 does not hydrate an entire long conversation. It requests only the
@@ -74,9 +76,17 @@ an older assistant message.
 
 ## Recording a prompt
 
-PWR supports two styles automatically.
+In **Voice Chat**, press PWR once from the conversation list to start the live
+session. Speak naturally: microphone audio streams continuously and server-side
+voice activity detection decides when each utterance is complete. Codex replies
+stream back automatically. Press BOOT to end Voice Chat and return to the list.
+
+Inside an existing Codex thread, PWR supports two push-to-submit styles.
 
 Starting either mode immediately stops any assistant read-aloud in progress.
+The dedicated Voice Chat uses Codex realtime end-to-end. A conversation opened
+from the list uses local transcription, submits the text as an ordinary Codex
+prompt, and reads the resulting final answer through TTS.
 
 ### Tap to start, tap to end
 
@@ -106,6 +116,10 @@ When **Auto-read** is enabled, the final assistant reply is read automatically
 after a prompt. Speech is produced by OpenAI when the Mac has a configured key;
 otherwise macOS Apple speech is used. See [Configuration and
 secrets](CONFIGURATION.md).
+
+Realtime Voice Chat replies are already spoken as they stream and are not
+synthesized a second time by Auto-read. No send action is required between
+utterances.
 
 ## Settings
 

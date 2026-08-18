@@ -625,6 +625,7 @@
       const query = new URLSearchParams(location.search);
       const token = query.get("token") || "";
       const agentId = query.get("agentId") || "codex";
+      const voiceChatStorageKey = `codex-remote-voice-chat:${agentId}`;
       document.body.classList.toggle("capture-mode", query.get("capture") === "1");
       const socketProtocol = location.protocol === "https:" ? "wss:" : "ws:";
       const socketUrl = `${socketProtocol}//${location.host}/api/v1/agents/${
@@ -640,6 +641,9 @@
         threads: [],
         threadPage: 0,
         thread: null,
+        voiceChat: false,
+        openingVoiceChat: false,
+        voiceChatThreadId: localStorage.getItem(voiceChatStorageKey) || "",
         readerMessageId: null,
         readerPage: 0,
         awaitingResponse: false,
@@ -715,9 +719,21 @@
             state.transcription = message.transcription;
             state.agentName = message.agentName || "";
           } else if (message.type === "threads") {
-            state.threads = message.threads;
+            state.threads = message.threads.filter(
+              (thread) => thread.id !== state.voiceChatThreadId,
+            );
             state.threadPage = Math.min(state.threadPage, lastThreadPage());
           } else if (message.type === "thread") {
+            const startVoiceChat = state.openingVoiceChat;
+            if (state.openingVoiceChat) {
+              state.voiceChat = true;
+              state.openingVoiceChat = false;
+              state.voiceChatThreadId = message.thread.id;
+              localStorage.setItem(voiceChatStorageKey, message.thread.id);
+              state.threads = state.threads.filter(
+                (thread) => thread.id !== message.thread.id,
+              );
+            }
             const changedThread = state.thread?.id !== message.thread.id;
             state.thread = message.thread;
             if (state.view === "settings") state.settingsReturnView = "thread";
@@ -728,6 +744,7 @@
               state.awaitingResponse = false;
             }
             selectReaderMessage(message.thread.messages || []);
+            if (startVoiceChat) window.setTimeout(() => void startTalk(), 0);
           } else if (message.type === "status") {
             state.status = message.status;
           } else if (message.type === "transcript") {
@@ -738,6 +755,7 @@
               4000,
             );
           } else if (message.type === "error") {
+            state.openingVoiceChat = false;
             showToast(message.message, 5000);
             state.status = "ready";
             state.awaitingResponse = false;
@@ -766,14 +784,16 @@
           buttonB.hidden = false;
           renderThreads();
           buttonALabel.textContent = "Agents";
-          buttonBLabel.textContent = "New thread";
+          buttonBLabel.textContent = "Voice chat";
         } else if (state.view === "thread") {
           controls.classList.remove("single");
           buttonA.hidden = false;
           buttonB.hidden = false;
           renderConversation();
           buttonALabel.textContent = state.recording ? "Cancel" : "Back";
-          buttonBLabel.textContent = state.recording ? "Send" : "Talk";
+          buttonBLabel.textContent = state.voiceChat
+            ? (state.recording ? "Live" : "Start")
+            : (state.recording ? "Send" : "Talk");
         } else if (state.view === "agents") {
           controls.classList.remove("single");
           buttonA.hidden = false;
@@ -789,7 +809,7 @@
           buttonALabel.textContent = "Back";
           buttonBLabel.textContent = "Change";
         }
-        recordingOverlay.classList.toggle("visible", state.recording);
+        recordingOverlay.classList.toggle("visible", state.recording && !state.voiceChat);
       }
 
       function renderThreads() {
@@ -1072,7 +1092,7 @@
               state.readerMessageId = message.id;
               state.readerPage = 0;
               state.awaitingResponse = false;
-              if (state.autoReadReplies && state.thread?.id) {
+              if (state.autoReadReplies && !state.voiceChat && state.thread?.id) {
                 send({
                   type: "speak_message",
                   threadId: state.thread.id,
@@ -1161,9 +1181,14 @@
       }
 
       function backToThreads() {
+        if (state.recording) {
+          stopLocalRecording();
+          send({ type: "audio_cancel" });
+        }
         state.view = "threads";
+        state.voiceChat = false;
         state.awaitingResponse = false;
-        send({ type: "list_threads" });
+        send({ type: "close_thread" });
         render();
       }
 
@@ -1213,13 +1238,18 @@
         window.location.assign(target);
       }
 
-      function createThread() {
+      function openVoiceChat() {
         if (state.view !== "threads") return;
         state.thread = null;
+        state.voiceChat = true;
+        state.openingVoiceChat = true;
         state.readerMessageId = null;
         state.readerPage = 0;
         state.view = "thread";
-        send({ type: "create_thread" });
+        send({
+          type: "open_voice_chat",
+          ...(state.voiceChatThreadId ? { threadId: state.voiceChatThreadId } : {}),
+        });
         render();
       }
 
@@ -1228,6 +1258,8 @@
         const thread = state.threads[index];
         if (!thread) return;
         state.thread = null;
+        state.voiceChat = false;
+        state.openingVoiceChat = false;
         state.readerMessageId = null;
         state.readerPage = 0;
         state.view = "thread";
@@ -1241,7 +1273,7 @@
           showToast("Speech transcription is unavailable on this desktop.");
           return;
         }
-        suppressPlayback = true;
+        suppressPlayback = !state.voiceChat;
         stopOutputPlayback();
         try {
           mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -1271,6 +1303,7 @@
             type: "audio_start",
             threadId: state.thread.id,
             sampleRate: 24000,
+            realtime: state.voiceChat,
           });
           render();
         } catch (error) {
@@ -1281,6 +1314,7 @@
 
       function stopTalk() {
         if (!state.recording) return;
+        if (state.voiceChat) return;
         stopLocalRecording();
         state.responseBaselineId = latestAssistantId();
         state.readerMessageId = null;
@@ -1392,14 +1426,14 @@
         if (state.view === "threads") showAgentSelector();
         else if (state.view === "agents") backFromAgentSelector();
         else if (state.view === "settings") closeSettings();
-        else if (state.recording) cancelTalk();
+        else if (state.recording && !state.voiceChat) cancelTalk();
         else backToThreads();
       });
       buttonB.addEventListener("click", () => {
-        if (state.view === "threads") createThread();
+        if (state.view === "threads") openVoiceChat();
         else if (state.view === "agents") void loadAgents();
         else if (state.view === "settings") activateSettingsFocus();
-        else if (state.recording) stopTalk();
+        else if (state.recording && !state.voiceChat) stopTalk();
         else void startTalk();
       });
       connection.addEventListener("click", () => {

@@ -49,6 +49,10 @@ user-facing answer for the device:
 - Avoid unnecessary follow-up questions, process narration, and decorative emoji.
 `.trim();
 
+export const DEVICE_REALTIME_INSTRUCTIONS = `${DEVICE_DEVELOPER_INSTRUCTIONS}
+For spoken output, speak only the final user-facing answer. Never narrate tool
+calls, analysis, progress updates, Markdown syntax, or interface mechanics.`;
+
 type AgentRuntime = {
   profile: CodexRemoteAgentProfile;
   client: CodexAppServerClient;
@@ -218,10 +222,7 @@ async function startServices(): Promise<void> {
     id: profile.id,
     name: profile.name,
     surface,
-    realtimeVoiceAvailable: () => (
-      surface.getSnapshot().authentication.account?.type === 'apiKey'
-      || Boolean(process.env.OPENAI_API_KEY?.trim())
-    ),
+    realtimeVoiceAvailable: () => true,
     readRecentMessages: (threadId) => readDeviceRecentMessages(client, threadId),
     releaseThread: async (threadId) => {
       try {
@@ -246,6 +247,8 @@ async function startServices(): Promise<void> {
     simulatorHtml,
     port: parsedPort(process.env.CODEX_REMOTE_PORT),
     pairing,
+    realtimeInstructions: DEVICE_REALTIME_INSTRUCTIONS,
+    realtimeVoice: process.env.CODEX_REMOTE_REALTIME_VOICE,
     transcribeAudio: process.platform === 'darwin'
       ? (wave) => transcribeWithAppleSpeechAnalyzer(wave)
       : undefined,
